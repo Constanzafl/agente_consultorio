@@ -1,0 +1,23 @@
+# LLM & Agentes
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+
+# RAG
+langchain-chroma>=0.2.0
+langchain-huggingface>=0.1.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# Embeddings
+sentence-transformers>=3.0.0
+
+# PDF processing
+pypdf>=4.0.0
+
+# UI (Fase 7)
+# chainlit>=1.0.0
+
+# Utilidades
+python-dotenv>=1.0.0
