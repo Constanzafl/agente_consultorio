@@ -1,0 +1,11 @@
+# =============================================================================
+# RAG — Fase 3 (guías clínicas PDF)
+# Instala torch + sentence-transformers (pesado, ~2 GB). Correr recién en Fase 3.
+#   pip install -r requirements-rag.txt
+# =============================================================================
+langchain-chroma>=0.2.0
+langchain-community>=0.3.0
+langchain-text-splitters>=0.3.0
+langchain-huggingface>=0.1.0
+sentence-transformers>=3.0.0
+pypdf>=4.0.0

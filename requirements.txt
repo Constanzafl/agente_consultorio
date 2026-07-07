@@ -1,23 +1,37 @@
+# =============================================================================
+# CORE — Fases 2 (grafo multi-agente), 4 (guardarrailes), 6 (evaluación)
+# Instalar primero:  pip install -r requirements.txt
+# =============================================================================
+
 # LLM & Agentes
 langchain>=0.3.0
 langchain-core>=0.3.0
-langchain-google-genai>=2.0.0
 langgraph>=0.2.0
 
-# RAG
-langchain-chroma>=0.2.0
-langchain-huggingface>=0.1.0
-langchain-community>=0.3.0
-langchain-text-splitters>=0.3.0
+# Proveedores de LLM (failover: Gemini -> Groq -> HuggingFace -> LM Studio)
+langchain-google-genai>=2.0.0    # Gemini (primario)
+langchain-groq>=0.2.0            # Groq (alternativa gratis y rápida)
+langchain-openai>=0.2.0         # LM Studio (servidor local OpenAI-compatible)
+langchain-huggingface>=0.1.0    # HuggingFace (inference API) + embeddings RAG
 
-# Embeddings
-sentence-transformers>=3.0.0
-
-# PDF processing
-pypdf>=4.0.0
-
-# UI (Fase 7)
-# chainlit>=1.0.0
+# Observabilidad
+langsmith>=0.1.0                 # Tracing de los agentes (opcional, por env vars)
 
 # Utilidades
 python-dotenv>=1.0.0
+requests>=2.31.0
+
+# =============================================================================
+# RAG — Fase 3 (guías clínicas PDF). Pesado (torch). Instalar recién en Fase 3:
+#   pip install -r requirements-rag.txt
+# =============================================================================
+# langchain-chroma>=0.2.0
+# langchain-community>=0.3.0
+# langchain-text-splitters>=0.3.0
+# sentence-transformers>=3.0.0
+# pypdf>=4.0.0
+
+# =============================================================================
+# UI — Fase 7
+# =============================================================================
+# chainlit>=1.0.0

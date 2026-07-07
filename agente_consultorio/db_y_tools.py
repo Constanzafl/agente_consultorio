@@ -60,7 +60,8 @@ def crear_base_de_datos(db_path: str = "consultorio.db") -> sqlite3.Connection:
             dia_semana INTEGER NOT NULL,   -- 0=Lunes, 1=Martes, ..., 4=Viernes
             hora_inicio TEXT NOT NULL,      -- Ej: "09:00"
             hora_fin TEXT NOT NULL,         -- Ej: "09:30" (turnos de 30 min)
-            activo INTEGER DEFAULT 1
+            activo INTEGER DEFAULT 1,
+            UNIQUE(dia_semana, hora_inicio)  -- evita franjas duplicadas
         )
     """)
 
@@ -92,7 +93,8 @@ def crear_base_de_datos(db_path: str = "consultorio.db") -> sqlite3.Connection:
             dosis_maxima TEXT,             -- "2550mg/día"
             contraindicaciones TEXT,
             efectos_adversos TEXT,
-            categoria TEXT                 -- "antidiabético", "antihipertensivo", "hipolipemiante"
+            categoria TEXT,                -- "antidiabético", "antihipertensivo", "hipolipemiante"
+            UNIQUE(nombre_generico)        -- una fila por droga
         )
     """)
 
@@ -139,8 +141,15 @@ def crear_base_de_datos(db_path: str = "consultorio.db") -> sqlite3.Connection:
 # =============================================================================
 
 def cargar_datos_ejemplo(conn: sqlite3.Connection):
-    """Carga datos de ejemplo para testear el sistema."""
+    """Carga datos de ejemplo para testear el sistema.
+    Es idempotente: si la DB ya fue sembrada, no hace nada (evita duplicar
+    turnos, solicitudes e historial en cada import del módulo)."""
     cursor = conn.cursor()
+
+    # Guard: si ya hay pacientes cargados, asumimos que la DB está sembrada.
+    cursor.execute("SELECT COUNT(*) FROM pacientes")
+    if cursor.fetchone()[0] > 0:
+        return
 
     # --- Pacientes ---
     pacientes = [
@@ -267,7 +276,7 @@ def cargar_datos_ejemplo(conn: sqlite3.Connection):
     """, conversaciones)
 
     conn.commit()
-    print("✅ Datos de ejemplo cargados correctamente.")
+    print("Datos de ejemplo cargados correctamente.")
 
 
 # =============================================================================
@@ -324,11 +333,11 @@ def registrar_paciente(
         """, (nombre, apellido, dni, fecha_nacimiento, telefono, email,
               obra_social, numero_afiliado, patologias, medicacion_actual))
         conn.commit()
-        return f"✅ Paciente {nombre} {apellido} (DNI: {dni}) registrado exitosamente con ID #{cursor.lastrowid}."
+        return f"Paciente {nombre} {apellido} (DNI: {dni}) registrado exitosamente con ID #{cursor.lastrowid}."
     except sqlite3.IntegrityError:
-        return f"⚠️ Ya existe un paciente con DNI {dni} en el sistema."
+        return f"Ya existe un paciente con DNI {dni} en el sistema."
     except Exception as e:
-        return f"❌ Error al registrar paciente: {str(e)}"
+        return f"Error al registrar paciente: {str(e)}"
 
 
 @tool
@@ -416,7 +425,7 @@ def consultar_agenda(fecha: str) -> str:
             f"({len(disponibles)} turnos libres):\n" + "\n".join(disponibles)
         )
     except ValueError:
-        return "⚠️ Formato de fecha inválido. Usá YYYY-MM-DD (ejemplo: 2025-07-15)."
+        return "Formato de fecha inválido. Usá YYYY-MM-DD (ejemplo: 2025-07-15)."
 
 
 @tool
@@ -446,7 +455,7 @@ def sacar_turno(
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     # Verificar que no haya otro turno en esa fecha/hora
     cursor.execute("""
@@ -454,21 +463,21 @@ def sacar_turno(
         WHERE fecha = ? AND hora = ? AND estado = 'confirmado'
     """, (fecha, hora))
     if cursor.fetchone():
-        return f"⚠️ El horario {hora} del {fecha} ya está ocupado. Consultá la agenda para ver horarios disponibles."
+        return f"El horario {hora} del {fecha} ya está ocupado. Consultá la agenda para ver horarios disponibles."
 
     # Verificar que el horario esté dentro de la agenda
     try:
         fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
         dia_semana = fecha_dt.weekday()
     except ValueError:
-        return "⚠️ Formato de fecha inválido. Usá YYYY-MM-DD."
+        return "Formato de fecha inválido. Usá YYYY-MM-DD."
 
     cursor.execute("""
         SELECT id FROM agenda_medico
         WHERE dia_semana = ? AND hora_inicio = ? AND activo = 1
     """, (dia_semana, hora))
     if not cursor.fetchone():
-        return f"⚠️ El horario {hora} no está dentro de la agenda del médico para ese día."
+        return f"El horario {hora} no está dentro de la agenda del médico para ese día."
 
     # Crear el turno
     cursor.execute("""
@@ -478,7 +487,7 @@ def sacar_turno(
     conn.commit()
 
     return (
-        f"✅ Turno confirmado:\n"
+        f"Turno confirmado:\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Fecha: {fecha} a las {hora}\n"
         f"  Motivo: {motivo}\n"
@@ -507,11 +516,11 @@ def cancelar_turno(turno_id: int) -> str:
     turno = cursor.fetchone()
 
     if not turno:
-        return f"⚠️ No se encontró un turno con ID #{turno_id}."
+        return f"No se encontró un turno con ID #{turno_id}."
     if turno['estado'] == 'cancelado':
-        return f"⚠️ El turno #{turno_id} ya estaba cancelado."
+        return f"El turno #{turno_id} ya estaba cancelado."
     if turno['estado'] == 'completado':
-        return f"⚠️ El turno #{turno_id} ya fue completado y no se puede cancelar."
+        return f"El turno #{turno_id} ya fue completado y no se puede cancelar."
 
     cursor.execute("""
         UPDATE turnos SET estado = 'cancelado' WHERE id = ?
@@ -519,7 +528,7 @@ def cancelar_turno(turno_id: int) -> str:
     conn.commit()
 
     return (
-        f"✅ Turno #{turno_id} cancelado:\n"
+        f"Turno #{turno_id} cancelado:\n"
         f"  Paciente: {turno['nombre']} {turno['apellido']}\n"
         f"  Era para: {turno['fecha']} a las {turno['hora']}"
     )
@@ -581,7 +590,7 @@ def solicitar_receta(
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     # Buscar si el medicamento existe en el vademecum
     cursor.execute("""
@@ -601,7 +610,7 @@ def solicitar_receta(
     conn.commit()
 
     return (
-        f"✅ Solicitud de receta creada (ID #{cursor.lastrowid}):\n"
+        f"Solicitud de receta creada (ID #{cursor.lastrowid}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Medicamento: {medicamento}\n"
         f"  Dosis: {dosis}\n"
@@ -628,7 +637,7 @@ def enviar_consulta_medica(paciente_id: int, consulta: str) -> str:
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     cursor.execute("""
         INSERT INTO solicitudes (paciente_id, tipo, descripcion)
@@ -637,7 +646,7 @@ def enviar_consulta_medica(paciente_id: int, consulta: str) -> str:
     conn.commit()
 
     return (
-        f"✅ Consulta registrada (ID #{cursor.lastrowid}):\n"
+        f"Consulta registrada (ID #{cursor.lastrowid}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Consulta: {consulta}\n"
         f"  Estado: PENDIENTE — el médico la revisará y responderá."
@@ -681,7 +690,7 @@ def ver_turnos_del_dia(fecha: str = "") -> str:
     respuesta = [f"Agenda del {fecha} ({len(turnos)} turnos):"]
     for t in turnos:
         respuesta.append(
-            f"\n  🕐 {t['hora']} — Turno #{t['id']}\n"
+            f"\n  {t['hora']} — Turno #{t['id']}\n"
             f"    Paciente: {t['nombre']} {t['apellido']} (DNI: {t['dni']})\n"
             f"    OS: {t['obra_social']} | Tipo: {t['tipo']}\n"
             f"    Motivo: {t['motivo']}\n"
@@ -713,11 +722,11 @@ def ver_solicitudes_pendientes() -> str:
 
     solicitudes = cursor.fetchall()
     if not solicitudes:
-        return "✅ No hay solicitudes pendientes."
+        return "No hay solicitudes pendientes."
 
     respuesta = [f"Solicitudes pendientes ({len(solicitudes)}):"]
     for s in solicitudes:
-        detalle = f"\n  📋 Solicitud #{s['id']} ({s['tipo'].upper()})\n"
+        detalle = f"\n  Solicitud #{s['id']} ({s['tipo'].upper()})\n"
         detalle += f"    Paciente: {s['nombre']} {s['apellido']}\n"
         detalle += f"    Fecha: {s['fecha_creacion']}\n"
         detalle += f"    Descripción: {s['descripcion']}\n"
@@ -752,9 +761,9 @@ def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
     sol = cursor.fetchone()
 
     if not sol:
-        return f"⚠️ No se encontró la solicitud #{solicitud_id}."
+        return f"No se encontró la solicitud #{solicitud_id}."
     if sol['estado'] != 'pendiente':
-        return f"⚠️ La solicitud #{solicitud_id} ya fue {sol['estado']}."
+        return f"La solicitud #{solicitud_id} ya fue {sol['estado']}."
 
     cursor.execute("""
         UPDATE solicitudes
@@ -766,7 +775,7 @@ def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
     conn.commit()
 
     return (
-        f"✅ Solicitud #{solicitud_id} APROBADA:\n"
+        f"Solicitud #{solicitud_id} APROBADA:\n"
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Nota del médico: {nota_medico or 'Sin observaciones'}"
@@ -794,9 +803,9 @@ def rechazar_solicitud(solicitud_id: int, motivo: str) -> str:
     sol = cursor.fetchone()
 
     if not sol:
-        return f"⚠️ No se encontró la solicitud #{solicitud_id}."
+        return f"No se encontró la solicitud #{solicitud_id}."
     if sol['estado'] != 'pendiente':
-        return f"⚠️ La solicitud #{solicitud_id} ya fue {sol['estado']}."
+        return f"La solicitud #{solicitud_id} ya fue {sol['estado']}."
 
     cursor.execute("""
         UPDATE solicitudes
@@ -808,7 +817,7 @@ def rechazar_solicitud(solicitud_id: int, motivo: str) -> str:
     conn.commit()
 
     return (
-        f"❌ Solicitud #{solicitud_id} RECHAZADA:\n"
+        f"Solicitud #{solicitud_id} RECHAZADA:\n"
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Motivo: {motivo}"
@@ -854,7 +863,7 @@ def cancelar_dia_completo(fecha: str, motivo: str) -> str:
     conn.commit()
 
     respuesta = [
-        f"⚠️ Se cancelaron {len(turnos)} turnos del {fecha}.\n"
+        f"Se cancelaron {len(turnos)} turnos del {fecha}.\n"
         f"  Motivo: {motivo}\n"
         f"\n  Pacientes a notificar:"
     ]
@@ -892,7 +901,7 @@ def consultar_vademecum(medicamento: str) -> str:
     respuesta = []
     for m in resultados:
         respuesta.append(
-            f"💊 {m['nombre_generico']} ({m['nombre_comercial']})\n"
+            f"{m['nombre_generico']} ({m['nombre_comercial']})\n"
             f"  Presentación: {m['presentacion']}\n"
             f"  Dosis habitual: {m['dosis_habitual']}\n"
             f"  Dosis máxima: {m['dosis_maxima']}\n"
@@ -919,10 +928,10 @@ def info_paciente(paciente_id: int) -> str:
     p = cursor.fetchone()
 
     if not p:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     return (
-        f"📋 Ficha del paciente #{p['id']}:\n"
+        f"Ficha del paciente #{p['id']}:\n"
         f"  Nombre: {p['nombre']} {p['apellido']}\n"
         f"  DNI: {p['dni']}\n"
         f"  Fecha de nacimiento: {p['fecha_nacimiento']}\n"
@@ -965,9 +974,9 @@ def pacientes_sin_control() -> str:
 
     pacientes = cursor.fetchall()
     if not pacientes:
-        return "✅ Todos los pacientes crónicos tienen turnos agendados o consulta reciente."
+        return "Todos los pacientes crónicos tienen turnos agendados o consulta reciente."
 
-    respuesta = [f"⚠️ Pacientes crónicos sin turno agendado ({len(pacientes)}):"]
+    respuesta = [f"Pacientes crónicos sin turno agendado ({len(pacientes)}):"]
     for p in pacientes:
         dias = "N/A"
         if p['fecha_ultima_consulta']:
@@ -1074,7 +1083,7 @@ def recuperar_historial_paciente(paciente_id: int, limite: int = 5) -> str:
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     # Historial de conversaciones
     cursor.execute("""
@@ -1095,13 +1104,13 @@ def recuperar_historial_paciente(paciente_id: int, limite: int = 5) -> str:
     ]
 
     for h in historial:
-        entrada = f"\n  📅 {h['fecha']}\n"
+        entrada = f"\n  {h['fecha']}\n"
         entrada += f"    Resumen: {h['resumen']}\n"
         entrada += f"    Temas: {h['temas']}\n"
         if h['acciones_realizadas']:
             entrada += f"    Acciones: {h['acciones_realizadas']}\n"
         if h['pendientes']:
-            entrada += f"    ⚠️ Pendientes: {h['pendientes']}"
+            entrada += f"    Pendientes: {h['pendientes']}"
         respuesta.append(entrada)
 
     return "\n".join(respuesta)
@@ -1136,7 +1145,7 @@ def guardar_resumen_conversacion(
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
-        return f"⚠️ No se encontró un paciente activo con ID #{paciente_id}."
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
 
     cursor.execute("""
         INSERT INTO historial_conversaciones
@@ -1146,7 +1155,7 @@ def guardar_resumen_conversacion(
     conn.commit()
 
     return (
-        f"✅ Resumen de conversación guardado (ID #{cursor.lastrowid}):\n"
+        f"Resumen de conversación guardado (ID #{cursor.lastrowid}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Temas: {temas}\n"
         f"  Pendientes: {pendientes or 'Ninguno'}"
@@ -1234,5 +1243,5 @@ if __name__ == "__main__":
     print(recuperar_historial_paciente.invoke({"paciente_id": 1}))
 
     print("\n" + "=" * 60)
-    print("✅ Todos los tests ejecutados.")
+    print("Todos los tests ejecutados.")
     print("=" * 60)
