@@ -15,7 +15,7 @@ Pensado para un médico de familia que atiende pacientes con enfermedades cróni
 
 | Componente | Tecnología |
 |---|---|
-| LLM | Gemini (free tier) |
+| LLM | LM studio Gemma |
 | Framework de agentes | LangGraph + LangChain |
 | Embeddings | HuggingFace (`sentence-transformers/all-mpnet-base-v2`) |
 | Vector store | ChromaDB |

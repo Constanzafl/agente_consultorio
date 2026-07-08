@@ -8,23 +8,24 @@ Este módulo contiene:
   3. Todas las tools decoradas con @tool para LangChain/LangGraph
   4. Separación clara: tools del PACIENTE vs tools del MÉDICO
 
-Para usar en Google Colab:
-  - Copiar este archivo en una celda o subirlo
-  - Instalar dependencias: pip install langchain langchain-core langgraph langchain-google-genai
-  - Configurar GEMINI_API_KEY en secrets de Colab
 =============================================================================
 """
 
 import sqlite3
+import pathlib
 import requests
 from datetime import datetime, timedelta
 from langchain.tools import tool
+
+# La base vive SIEMPRE en la raíz del repo (un nivel arriba de este archivo),
+# sin importar desde qué carpeta ejecutes. Evita crear varios consultorio.db.
+DB_PATH_DEFAULT = str(pathlib.Path(__file__).resolve().parent.parent / "consultorio.db")
 
 # =============================================================================
 # 1. BASE DE DATOS — Esquema
 # =============================================================================
 
-def crear_base_de_datos(db_path: str = "consultorio.db") -> sqlite3.Connection:
+def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
     """
     Crea la base de datos SQLite con todas las tablas necesarias.
     Retorna la conexión (con check_same_thread=False para LangGraph).
