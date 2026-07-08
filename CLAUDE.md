@@ -70,4 +70,4 @@ El vademecum incluye: Metformina, Enalapril, Losartán, Atorvastatina, Amlodipin
 - Las tools devuelven strings de texto plano (sin emojis; rompen la consola cp1252 en Windows)
 - En Windows, correr con `PYTHONUTF8=1` (los emojis rompen la consola cp1252)
 - Entorno: venv con Python 3.12 en `.venv/` (torch/sentence-transformers no tiene
-  wheels para 3.14). Deps core en `requirements.txt`, RAG en `requirements-rag.txt`
+  wheels para 3.14). Todas las deps en un solo `requirements.txt`
