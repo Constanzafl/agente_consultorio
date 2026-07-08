@@ -2,19 +2,19 @@
 =============================================================================
 AGENTE CONSULTORIO MÉDICO — Factory de LLM con FAILOVER de proveedores
 =============================================================================
-Problema: el free tier de Gemini se agota rápido. Solución: una cadena de
-proveedores con failover automático usando `.with_fallbacks()` de LangChain.
-Cuando un proveedor tira error (rate limit, cuota agotada, caída), el grafo
-usa el siguiente que esté configurado, sin cambiar una línea del grafo.
+Proveedor PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado y sin cuota.
+Los proveedores cloud quedan como failover OPCIONAL usando `.with_fallbacks()`
+de LangChain: si LM Studio no está levantado (o falla), y hay claves cloud
+cargadas, el grafo usa la siguiente sin cambiar una línea.
 
-Orden por defecto:  gemini -> groq -> huggingface -> lmstudio
-  - gemini      : free tier, primario (cuota baja)
-  - groq        : free tier, muy rápido, límites más generosos
-  - huggingface : inference API gratis (tool-calling best-effort)
-  - lmstudio    : modelo LOCAL sin límite de cuota (última red de seguridad)
+Orden por defecto:  lmstudio -> gemini -> groq -> huggingface
+  - lmstudio    : modelo LOCAL sin límite de cuota (PRIMARIO)
+  - gemini      : free tier (fallback, cuota baja)
+  - groq        : free tier, muy rápido (fallback)
+  - huggingface : inference API gratis (fallback, tool-calling best-effort)
 
-Se incluye un proveedor SOLO si su clave/config está presente. Con tener una
-sola alcanza para arrancar.
+Se incluye un proveedor SOLO si su clave/config está presente (LM Studio: si el
+server local está escuchando). Con tener uno solo alcanza para arrancar.
 
 Uso:
     from llm import crear_llm
@@ -44,15 +44,16 @@ def _config_langsmith():
 
 _config_langsmith()
 
-# Orden de failover configurable por env
-ORDEN_DEFAULT = ["gemini", "groq", "huggingface", "lmstudio"]
+# Orden de failover configurable por env (LM Studio local como primario)
+ORDEN_DEFAULT = ["lmstudio", "gemini", "groq", "huggingface"]
 
-# Modelos por defecto (se pueden pisar por env)
+# Modelos por defecto (se pueden pisar por env). Para lmstudio "" = auto-detectar
+# el modelo que esté cargado en el server.
 MODELOS_DEFAULT = {
     "gemini": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
     "huggingface": "meta-llama/Llama-3.3-70B-Instruct",
-    "lmstudio": "local-model",
+    "lmstudio": "",  # vacío => se detecta el modelo cargado en LM Studio
 }
 
 
@@ -73,6 +74,20 @@ def _lmstudio_activo(base_url: str) -> bool:
             return True
     except OSError:
         return False
+
+
+def _lmstudio_modelo(base_url: str) -> str:
+    """Devuelve el id del modelo cargado en LM Studio (consultando /models).
+    Si no puede detectarlo, usa 'local-model' (LM Studio enruta al que tenga cargado)."""
+    forzado = os.getenv("LMSTUDIO_MODEL", "").strip()
+    if forzado:
+        return forzado
+    try:
+        import requests
+        r = requests.get(f"{base_url.rstrip('/')}/models", timeout=1.5)
+        return r.json()["data"][0]["id"]
+    except Exception:
+        return "local-model"
 
 
 # --- Constructores por proveedor (importan perezoso para no exigir todas las libs) ---
@@ -108,9 +123,10 @@ def _build_huggingface(temperature: float):
 
 def _build_lmstudio(temperature: float):
     from langchain_openai import ChatOpenAI
+    base_url = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
     return ChatOpenAI(
-        model=os.getenv("LMSTUDIO_MODEL", MODELOS_DEFAULT["lmstudio"]),
-        base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+        model=_lmstudio_modelo(base_url),  # auto-detecta el modelo cargado
+        base_url=base_url,
         api_key="lm-studio",  # LM Studio ignora la key
         temperature=temperature,
     )
@@ -161,9 +177,9 @@ def crear_llm(tools: list | None = None, temperature: float = 0.0):
     activos = proveedores_disponibles()
     if not activos:
         raise RuntimeError(
-            "No hay ningún proveedor de LLM configurado. Cargá al menos una "
-            "clave en .env (GEMINI_API_KEY, GROQ_API_KEY, HUGGINGFACEHUB_API_TOKEN) "
-            "o levantá LM Studio en local."
+            "No hay ningún proveedor de LLM disponible. Levantá LM Studio "
+            "(Developer -> Start Server, con gemma-4-e4b cargado) o, como "
+            "alternativa, cargá una clave cloud en .env (GEMINI/GROQ/HUGGINGFACE)."
         )
 
     modelos = []

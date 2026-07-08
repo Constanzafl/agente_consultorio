@@ -34,8 +34,9 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
 ## Estado actual
 - ✅ Fase 1: DB + 22 tools (todas testeadas y pasando)
 - ✅ Fase 2: Grafo LangGraph multi-agente (orquestador híbrido + paciente + médico),
-  memoria corto plazo (MemorySaver), y `llm.py` con failover multi-proveedor
-  (Gemini→Groq→HF→LM Studio) + LangSmith. Falta probar con API key real.
+  memoria corto plazo (MemorySaver), y `llm.py` con failover multi-proveedor.
+  LLM PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado. Cloud (Gemini→Groq→HF)
+  como fallback opcional. LangSmith para tracing.
 - ⬜ Fase 3: RAG con guías clínicas
 - ⬜ Fase 4: Guardarrailes
 - ⬜ Fase 5: Tier 2 (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)

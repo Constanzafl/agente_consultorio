@@ -16,7 +16,7 @@ Memoria de CORTO plazo: MemorySaver (checkpointer) por thread_id.
 Human-in-the-loop: el paciente solo CREA solicitudes (recetas/consultas) que
 quedan 'pendientes'; el médico las aprueba/rechaza con sus tools.
 
-LLM con failover multi-proveedor: ver llm.py (Gemini -> Groq -> HF -> LM Studio).
+LLM con failover multi-proveedor: ver llm.py (LM Studio local -> Gemini -> Groq -> HF).
 =============================================================================
 """
 
