@@ -30,9 +30,15 @@ from langgraph.checkpoint.memory import MemorySaver
 try:
     from .db_y_tools import tools_paciente, tools_medico
     from .llm import crear_llm, proveedores_disponibles
+    from .rag import consultar_guias
 except ImportError:
     from db_y_tools import tools_paciente, tools_medico
     from llm import crear_llm, proveedores_disponibles
+    from rag import consultar_guias
+
+# La tool de RAG (guías clínicas) la usan ambos agentes
+tools_paciente = tools_paciente + [consultar_guias]
+tools_medico = tools_medico + [consultar_guias]
 
 
 # =============================================================================
@@ -58,7 +64,9 @@ PROMPT_ROUTER = (
 
 PROMPT_PACIENTE = (
     "Sos el asistente virtual de un consultorio de medicina familiar, atendiendo a un PACIENTE.\n"
-    "Podés: gestionar turnos, registrar pacientes nuevos, solicitar recetas y enviar consultas al médico.\n\n"
+    "Podés: gestionar turnos, registrar pacientes nuevos, solicitar recetas y enviar consultas al médico.\n"
+    "Para dudas sobre hábitos saludables o el manejo de enfermedades crónicas (HTA, DM2, etc.), "
+    "usá la tool `consultar_guias` (busca en guías clínicas) y respondé SOLO con lo que traiga.\n\n"
     "REGLAS (guardarrailes):\n"
     "1. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
     "2. Las recetas y consultas SIEMPRE quedan PENDIENTES de aprobación del médico (nunca las das por aprobadas).\n"
@@ -77,7 +85,8 @@ PROMPT_MEDICO = (
     "1. Presentá la información de forma precisa y accionable; el médico decide.\n"
     "2. Para aprobar/rechazar una solicitud, confirmá cuál (por ID) antes de ejecutar.\n"
     "3. Si te piden evidencia clínica, usá PubMed con términos en inglés.\n"
-    "4. No inventes datos de vademecum: si la tool no lo encuentra, decilo."
+    "4. Para recomendaciones basadas en guías (HTA, DM2, hábitos), usá `consultar_guias`.\n"
+    "5. No inventes datos de vademecum: si la tool no lo encuentra, decilo."
 )
 
 

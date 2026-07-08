@@ -11,8 +11,23 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
 - **Agente médico** (12 tools): agenda, aprobar/rechazar solicitudes, vademecum, PubMed, seguimiento crónicos
 - **Human-in-the-loop**: todo lo que genera el agente paciente (recetas, respuestas) queda pendiente para aprobación del médico
 
+## Decisión de arquitectura (importante)
+El curso enseñó LangGraph "a mano" (Clase 1), RAG (Clase 2) y Deep Agents (Clase 3).
+Para un asistente MÉDICO (seguridad crítica) prima el CONTROL, no la autonomía.
+Por eso:
+- **Backbone = LangGraph** (control total sobre ruteo, guardarrailes y HITL).
+- **Skills** (requisito del profe) → carpeta `skills/` con playbooks modulares que
+  el agente carga on-demand, implementados sobre LangGraph (no se migra a deepagents).
+- **Memoria largo plazo** → SQLite (`historial_conversaciones`); opcional sumar el
+  patrón `Store` de LangGraph para que se vea canónico.
+- **Subagente estilo Deep Agents SOLO para PubMed** (búsqueda de evidencia): es la
+  única tarea abierta/investigación donde la autonomía aporta. Ahí se luce deepagents.
+- No se usa deepagents como framework general porque (a) resta control en un dominio
+  médico y (b) pediría un modelo grande (la gemma-4-e4b local no lo aguanta → cuota).
+
 ## Stack técnico (todo open source / gratis)
-- LLM: Gemini (free tier) via `langchain-google-genai`
+- LLM PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado. Fallback cloud opcional
+  (Gemini free tier → Groq → HuggingFace) vía `llm.py`. Ver failover multi-proveedor.
 - Embeddings: HuggingFace `sentence-transformers/all-mpnet-base-v2`
 - Vector store: ChromaDB
 - Base de datos: SQLite (7 tablas: pacientes, agenda_medico, turnos, medicamentos, solicitudes, historial_conversaciones)
@@ -30,6 +45,7 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
 5. **Múltiples agentes** (plus) — Orquestador + 2 subagentes
 6. **Human-in-the-loop** (plus) — Médico aprueba recetas, valida respuestas
 7. **Memoria** — Corto plazo (state LangGraph), largo plazo (SQLite), conversacional (historial_conversaciones)
+8. **Skills** (pide el profe) — playbooks modulares en `skills/` cargados on-demand
 
 ## Estado actual
 - ✅ Fase 1: DB + 22 tools (todas testeadas y pasando)
@@ -37,9 +53,12 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
   memoria corto plazo (MemorySaver), y `llm.py` con failover multi-proveedor.
   LLM PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado. Cloud (Gemini→Groq→HF)
   como fallback opcional. LangSmith para tracing.
-- ⬜ Fase 3: RAG con guías clínicas
+- ✅ Fase 3: RAG con guías clínicas (`rag.py`): PDFs en data/guias_pdf/ → chunks →
+  embeddings HF all-mpnet-base-v2 → ChromaDB (chroma_db/). Tool `consultar_guias`
+  integrada en agente paciente y médico. Reindexar: `python agente_consultorio/rag.py`
 - ⬜ Fase 4: Guardarrailes
-- ⬜ Fase 5: Tier 2 (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)
+- ⬜ Fase 5: Skills (`skills/`) + subagente PubMed estilo Deep Agents + Tier 2
+  (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)
 - ⬜ Fase 6: Evaluación
 - ⬜ Fase 7: UI Chainlit + video
 
@@ -51,7 +70,9 @@ agente_consultorio/
 ├── grafo.py             # Fase 2 — LangGraph multi-agente
 ├── rag.py               # Fase 3 — RAG guías clínicas
 ├── guardarrailes.py     # Fase 4 — Guardarrailes
-└── integraciones.py     # Fase 5 — Gmail, PRODIABA, etc.
+├── skills_loader.py     # Fase 5 — carga de skills on-demand
+└── integraciones.py     # Fase 5 — Gmail, PRODIABA, subagente PubMed
+skills/                  # Fase 5 — playbooks modulares (.md) que el agente carga
 tests/
 └── test_evaluacion.py   # Fase 6 — Pipeline de evaluación
 data/
