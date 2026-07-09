@@ -27,5 +27,5 @@ langsmith>=0.1.0                 # Tracing de los agentes (opcional, por env var
 python-dotenv>=1.0.0
 requests>=2.31.0
 
-# --- UI (Fase 7) — descomentar cuando lleguemos ---
-# chainlit>=1.0.0
+# --- UI (Fase 7) ---
+chainlit>=1.0.0

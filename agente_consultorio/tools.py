@@ -1,292 +1,29 @@
 """
 =============================================================================
-AGENTE CONSULTORIO MÉDICO — Fase 1: Base de datos y herramientas
+AGENTE CONSULTORIO MÉDICO — Herramientas (@tool) del paciente y del médico
 =============================================================================
-Este módulo contiene:
-  1. Esquema SQLite (pacientes, agenda, turnos, medicamentos, recetas, solicitudes)
-  2. Datos de ejemplo para testing
-  3. Todas las tools decoradas con @tool para LangChain/LangGraph
-  4. Separación clara: tools del PACIENTE vs tools del MÉDICO
-
+Las 22 tools decoradas con @tool para LangChain/LangGraph. Usan la conexión
+`conn` definida en db.py. Separación clara: tools del PACIENTE vs del MÉDICO.
 =============================================================================
 """
 
+import sys
 import sqlite3
-import pathlib
 import requests
 from datetime import datetime, timedelta
 from langchain.tools import tool
 
-# La base vive SIEMPRE en la raíz del repo (un nivel arriba de este archivo),
-# sin importar desde qué carpeta ejecutes. Evita crear varios consultorio.db.
-DB_PATH_DEFAULT = str(pathlib.Path(__file__).resolve().parent.parent / "consultorio.db")
+# La conexión y el esquema viven en db.py
+try:
+    from .db import conn
+except ImportError:
+    from db import conn
 
-# =============================================================================
-# 1. BASE DE DATOS — Esquema
-# =============================================================================
-
-def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
-    """
-    Crea la base de datos SQLite con todas las tablas necesarias.
-    Retorna la conexión (con check_same_thread=False para LangGraph).
-    """
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row  # Para acceder a columnas por nombre
-    cursor = conn.cursor()
-
-    # --- PACIENTES ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pacientes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            apellido TEXT NOT NULL,
-            dni TEXT UNIQUE NOT NULL,
-            fecha_nacimiento TEXT,
-            telefono TEXT,
-            email TEXT,
-            obra_social TEXT,
-            numero_afiliado TEXT,
-            patologias TEXT,          -- Ej: "HTA,DM2,Obesidad" (separadas por coma)
-            medicacion_actual TEXT,   -- Ej: "Metformina 850mg c/12hs, Enalapril 10mg c/24hs"
-            fecha_ultima_consulta TEXT,
-            activo INTEGER DEFAULT 1,
-            fecha_registro TEXT DEFAULT (datetime('now', 'localtime'))
-        )
-    """)
-
-    # --- AGENDA DEL MÉDICO (horarios disponibles por día de semana) ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS agenda_medico (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dia_semana INTEGER NOT NULL,   -- 0=Lunes, 1=Martes, ..., 4=Viernes
-            hora_inicio TEXT NOT NULL,      -- Ej: "09:00"
-            hora_fin TEXT NOT NULL,         -- Ej: "09:30" (turnos de 30 min)
-            activo INTEGER DEFAULT 1,
-            UNIQUE(dia_semana, hora_inicio)  -- evita franjas duplicadas
-        )
-    """)
-
-    # --- TURNOS ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS turnos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            paciente_id INTEGER NOT NULL,
-            fecha TEXT NOT NULL,            -- "2025-07-15"
-            hora TEXT NOT NULL,             -- "09:00"
-            motivo TEXT,                    -- "Control DM2", "Seguimiento HTA", "Primera consulta"
-            tipo TEXT DEFAULT 'seguimiento', -- "primera_vez", "seguimiento", "urgencia"
-            estado TEXT DEFAULT 'confirmado', -- "confirmado", "cancelado", "completado"
-            recordatorio_enviado INTEGER DEFAULT 0,
-            notas TEXT,
-            fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
-            FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
-        )
-    """)
-
-    # --- MEDICAMENTOS (vademecum simplificado) ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS medicamentos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre_generico TEXT NOT NULL,
-            nombre_comercial TEXT,
-            presentacion TEXT,             -- "Comprimidos 850mg", "Comprimidos 10mg"
-            dosis_habitual TEXT,           -- "850mg cada 12 horas"
-            dosis_maxima TEXT,             -- "2550mg/día"
-            contraindicaciones TEXT,
-            efectos_adversos TEXT,
-            categoria TEXT,                -- "antidiabético", "antihipertensivo", "hipolipemiante"
-            UNIQUE(nombre_generico)        -- una fila por droga
-        )
-    """)
-
-    # --- RECETAS / SOLICITUDES ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS solicitudes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            paciente_id INTEGER NOT NULL,
-            tipo TEXT NOT NULL,            -- "receta", "formulario_prodiaba", "consulta_medica", "respuesta_borrador"
-            estado TEXT DEFAULT 'pendiente', -- "pendiente", "aprobada", "rechazada", "completada"
-            descripcion TEXT,              -- Detalle de lo que se solicita
-            medicamento TEXT,              -- Para recetas: nombre del medicamento
-            dosis TEXT,                    -- Para recetas: dosis solicitada
-            cantidad TEXT,                 -- Para recetas: cantidad de envases
-            respuesta_borrador TEXT,       -- Para consultas: respuesta generada por el agente
-            respuesta_medico TEXT,         -- Respuesta/nota del médico
-            fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
-            fecha_resolucion TEXT,
-            FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
-        )
-    """)
-
-    # --- HISTORIAL DE CONVERSACIONES (memoria de largo plazo) ---
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS historial_conversaciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            paciente_id INTEGER NOT NULL,
-            rol TEXT NOT NULL,              -- "paciente" o "medico" (quién inició la conversación)
-            resumen TEXT NOT NULL,          -- Resumen generado por el LLM de la conversación
-            temas TEXT,                     -- Temas tratados: "receta,efectos_adversos,turno"
-            acciones_realizadas TEXT,       -- "Se sacó turno para 2025-07-20, Se solicitó receta de Metformina"
-            pendientes TEXT,               -- "Paciente reportó náuseas con Metformina, evaluar en próx consulta"
-            fecha TEXT DEFAULT (datetime('now', 'localtime')),
-            FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
-        )
-    """)
-
-    conn.commit()
-    return conn
-
-
-# =============================================================================
-# 2. DATOS DE EJEMPLO
-# =============================================================================
-
-def cargar_datos_ejemplo(conn: sqlite3.Connection):
-    """Carga datos de ejemplo para testear el sistema.
-    Es idempotente: si la DB ya fue sembrada, no hace nada (evita duplicar
-    turnos, solicitudes e historial en cada import del módulo)."""
-    cursor = conn.cursor()
-
-    # Guard: si ya hay pacientes cargados, asumimos que la DB está sembrada.
-    cursor.execute("SELECT COUNT(*) FROM pacientes")
-    if cursor.fetchone()[0] > 0:
-        return
-
-    # --- Pacientes ---
-    pacientes = [
-        ("María", "González", "30123456", "1975-03-15", "+5491155551234",
-         "maria.gonzalez@email.com", "OSDE", "12345678",
-         "HTA,DM2", "Metformina 850mg c/12hs, Enalapril 10mg c/24hs", "2025-04-10"),
-        ("Carlos", "Rodríguez", "28987654", "1970-08-22", "+5491155555678",
-         "carlos.rod@email.com", "Swiss Medical", "87654321",
-         "HTA,Obesidad,Dislipemia", "Losartán 50mg c/24hs, Atorvastatina 20mg c/24hs", "2025-01-15"),
-        ("Ana", "Martínez", "35456789", "1985-11-03", "+5491155559012",
-         "ana.martinez@email.com", "OSDE", "11223344",
-         "DM2", "Metformina 1000mg c/12hs", "2025-06-01"),
-    ]
-    cursor.executemany("""
-        INSERT OR IGNORE INTO pacientes
-        (nombre, apellido, dni, fecha_nacimiento, telefono, email,
-         obra_social, numero_afiliado, patologias, medicacion_actual, fecha_ultima_consulta)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, pacientes)
-
-    # --- Agenda del médico (Lunes a Viernes, turnos de 30 min, 9:00-13:00) ---
-    for dia in range(5):  # 0=Lunes a 4=Viernes
-        for hora in range(9, 13):
-            for minuto in ["00", "30"]:
-                hora_inicio = f"{hora:02d}:{minuto}"
-                if minuto == "00":
-                    hora_fin = f"{hora:02d}:30"
-                else:
-                    hora_fin = f"{hora+1:02d}:00"
-                cursor.execute("""
-                    INSERT OR IGNORE INTO agenda_medico (dia_semana, hora_inicio, hora_fin)
-                    VALUES (?, ?, ?)
-                """, (dia, hora_inicio, hora_fin))
-
-    # --- Medicamentos (vademecum básico) ---
-    medicamentos = [
-        ("Metformina", "Glucophage", "Comprimidos 500mg / 850mg / 1000mg",
-         "850mg cada 12 horas con las comidas", "2550mg/día",
-         "Insuficiencia renal severa, acidosis metabólica, insuficiencia hepática",
-         "Náuseas, diarrea, dolor abdominal, déficit vitamina B12",
-         "antidiabético"),
-        ("Enalapril", "Lotrial", "Comprimidos 5mg / 10mg / 20mg",
-         "10mg cada 24 horas", "40mg/día",
-         "Embarazo, angioedema previo, estenosis bilateral de arterias renales",
-         "Tos seca, hipotensión, hiperpotasemia, mareos",
-         "antihipertensivo"),
-        ("Losartán", "Cozaar", "Comprimidos 25mg / 50mg / 100mg",
-         "50mg cada 24 horas", "100mg/día",
-         "Embarazo, hiperpotasemia severa",
-         "Mareos, hipotensión, hiperpotasemia",
-         "antihipertensivo"),
-        ("Atorvastatina", "Lipitor", "Comprimidos 10mg / 20mg / 40mg / 80mg",
-         "20mg cada 24 horas por la noche", "80mg/día",
-         "Enfermedad hepática activa, embarazo, lactancia",
-         "Mialgias, elevación de transaminasas, rabdomiólisis (raro)",
-         "hipolipemiante"),
-        ("Amlodipina", "Norvasc", "Comprimidos 5mg / 10mg",
-         "5mg cada 24 horas", "10mg/día",
-         "Estenosis aórtica severa, shock cardiogénico",
-         "Edema de miembros inferiores, cefalea, rubor facial",
-         "antihipertensivo"),
-        ("Glimepirida", "Amaryl", "Comprimidos 1mg / 2mg / 4mg",
-         "2mg cada 24 horas antes del desayuno", "8mg/día",
-         "DM1, cetoacidosis diabética, insuficiencia hepática o renal severa",
-         "Hipoglucemia, aumento de peso, náuseas",
-         "antidiabético"),
-        ("Hidroclorotiazida", "Diurix", "Comprimidos 25mg / 50mg",
-         "25mg cada 24 horas por la mañana", "50mg/día",
-         "Anuria, hipopotasemia, hiponatremia severa",
-         "Hipopotasemia, hiponatremia, hiperuricemia, hiperglucemia",
-         "diurético"),
-        ("Insulina Glargina", "Lantus", "Solución inyectable 100 UI/ml",
-         "Según indicación médica, generalmente 10 UI/día al inicio", "Según indicación médica",
-         "Hipoglucemia, hipersensibilidad a insulina glargina",
-         "Hipoglucemia, reacciones en sitio de inyección, lipodistrofia",
-         "insulina"),
-    ]
-    cursor.executemany("""
-        INSERT OR IGNORE INTO medicamentos
-        (nombre_generico, nombre_comercial, presentacion, dosis_habitual,
-         dosis_maxima, contraindicaciones, efectos_adversos, categoria)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, medicamentos)
-
-    # --- Turnos de ejemplo ---
-    # Un turno futuro para María
-    cursor.execute("""
-        INSERT OR IGNORE INTO turnos (paciente_id, fecha, hora, motivo, tipo, estado)
-        VALUES (1, '2025-07-20', '09:30', 'Control DM2 y HTA', 'seguimiento', 'confirmado')
-    """)
-
-    # Una solicitud pendiente
-    cursor.execute("""
-        INSERT OR IGNORE INTO solicitudes
-        (paciente_id, tipo, descripcion, medicamento, dosis, cantidad)
-        VALUES (1, 'receta', 'Solicitud de receta mensual', 'Metformina 850mg', '1 comprimido cada 12 horas', '2 cajas')
-    """)
-
-    # --- Historial de conversaciones de ejemplo ---
-    conversaciones = [
-        (1, "paciente",
-         "La paciente consultó sobre efectos adversos de Metformina. Refiere náuseas después de tomar la pastilla. Se le recomendó tomarla durante las comidas y no en ayunas.",
-         "efectos_adversos,metformina",
-         "Se brindó recomendación sobre toma de Metformina con comidas",
-         "Evaluar si persisten náuseas en próxima consulta",
-         "2025-06-15 10:30:00"),
-        (1, "paciente",
-         "La paciente solicitó receta de Metformina 850mg (2 cajas) y Enalapril 10mg (1 caja). Ambas quedaron pendientes de aprobación médica.",
-         "receta,metformina,enalapril",
-         "Se crearon solicitudes de receta #5 y #6",
-         None,
-         "2025-06-28 14:15:00"),
-        (2, "paciente",
-         "El paciente preguntó cada cuánto tiene que hacerse análisis de sangre. Se le indicó que por sus patologías (HTA, Obesidad, Dislipemia) debería hacerse un control cada 3-6 meses. No tiene turno agendado.",
-         "controles,análisis,seguimiento",
-         "Se recomendó sacar turno para control",
-         "Paciente sin turno — hace más de 5 meses de última consulta",
-         "2025-05-20 09:00:00"),
-    ]
-    cursor.executemany("""
-        INSERT OR IGNORE INTO historial_conversaciones
-        (paciente_id, rol, resumen, temas, acciones_realizadas, pendientes, fecha)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, conversaciones)
-
-    conn.commit()
-    print("Datos de ejemplo cargados correctamente.")
-
-
-# =============================================================================
-# 3. CONEXIÓN GLOBAL (se usa en todas las tools)
-# =============================================================================
-
-# Inicializar la DB al importar el módulo
-conn = crear_base_de_datos()
-cargar_datos_ejemplo(conn)
+# Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 
 # =============================================================================
@@ -593,16 +330,7 @@ def solicitar_receta(
     if not paciente:
         return f"No se encontró un paciente activo con ID #{paciente_id}."
 
-    # Buscar si el medicamento existe en el vademecum
-    cursor.execute("""
-        SELECT nombre_generico, dosis_habitual FROM medicamentos
-        WHERE nombre_generico LIKE ? OR nombre_comercial LIKE ?
-    """, (f"%{medicamento}%", f"%{medicamento}%"))
-    med = cursor.fetchone()
-
     descripcion = f"Solicitud de receta: {medicamento}, {dosis}, {cantidad}"
-    if med:
-        descripcion += f" (Vademecum: dosis habitual = {med['dosis_habitual']})"
 
     cursor.execute("""
         INSERT INTO solicitudes (paciente_id, tipo, descripcion, medicamento, dosis, cantidad)
@@ -879,41 +607,6 @@ def cancelar_dia_completo(fecha: str, motivo: str) -> str:
 
 
 @tool
-def consultar_vademecum(medicamento: str) -> str:
-    """
-    Consulta información de un medicamento en el vademecum:
-    dosis habitual, dosis máxima, contraindicaciones y efectos adversos.
-
-    Args:
-        medicamento: Nombre genérico o comercial del medicamento
-    Returns:
-        Información completa del medicamento
-    """
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM medicamentos
-        WHERE nombre_generico LIKE ? OR nombre_comercial LIKE ?
-    """, (f"%{medicamento}%", f"%{medicamento}%"))
-
-    resultados = cursor.fetchall()
-    if not resultados:
-        return f"No se encontró '{medicamento}' en el vademecum. Verificá el nombre."
-
-    respuesta = []
-    for m in resultados:
-        respuesta.append(
-            f"{m['nombre_generico']} ({m['nombre_comercial']})\n"
-            f"  Presentación: {m['presentacion']}\n"
-            f"  Dosis habitual: {m['dosis_habitual']}\n"
-            f"  Dosis máxima: {m['dosis_maxima']}\n"
-            f"  Categoría: {m['categoria']}\n"
-            f"  Contraindicaciones: {m['contraindicaciones']}\n"
-            f"  Efectos adversos: {m['efectos_adversos']}"
-        )
-    return "\n\n".join(respuesta)
-
-
-@tool
 def info_paciente(paciente_id: int) -> str:
     """
     Muestra la información completa de un paciente.
@@ -1006,7 +699,8 @@ def buscar_pubmed(query: str, max_resultados: int = 3) -> str:
         query: Términos de búsqueda en inglés (ej: "metformin renal impairment dosage")
         max_resultados: Cantidad máxima de artículos a devolver (por defecto 3)
     Returns:
-        Lista de artículos con título, autores, revista, fecha y link
+        Lista de artículos (título, autores, revista, fecha, link) MÁS el contenido
+        (abstracts en inglés) para que el agente pueda resumir la evidencia en español.
     """
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
@@ -1038,7 +732,22 @@ def buscar_pubmed(query: str, max_resultados: int = 3) -> str:
         summary_resp.raise_for_status()
         results = summary_resp.json()["result"]
 
-        # Paso 3: Formatear resultados
+        # Paso 3: Traer los abstracts (contenido) para poder resumir la evidencia
+        efetch_url = f"{base_url}/efetch.fcgi"
+        efetch_params = {
+            "db": "pubmed",
+            "id": ",".join(ids),
+            "rettype": "abstract",
+            "retmode": "text",
+        }
+        try:
+            efetch_resp = requests.get(efetch_url, params=efetch_params, timeout=15)
+            efetch_resp.raise_for_status()
+            abstracts = efetch_resp.text.strip()
+        except requests.RequestException:
+            abstracts = ""
+
+        # Paso 4: Formatear resultados
         articulos = []
         for uid in ids:
             if uid in results:
@@ -1055,10 +764,64 @@ def buscar_pubmed(query: str, max_resultados: int = 3) -> str:
                     f"  Link: https://pubmed.ncbi.nlm.nih.gov/{uid}/"
                 )
 
-        return f"Se encontraron {len(articulos)} artículos:\n\n" + "\n\n".join(articulos)
+        salida = f"Se encontraron {len(articulos)} artículos:\n\n" + "\n\n".join(articulos)
+        if abstracts:
+            salida += (
+                "\n\n=== CONTENIDO (abstracts, en inglés) ===\n"
+                "Usá estos abstracts para hacer un RESUMEN EN ESPAÑOL de la evidencia.\n\n"
+                + abstracts
+            )
+        return salida
 
     except requests.RequestException as e:
         return f"Error al consultar PubMed: {str(e)}"
+
+
+@tool
+def buscar_medicamento(nombre_droga: str) -> str:
+    """
+    Consulta la información oficial de un medicamento en la base de datos de la FDA
+    (OpenFDA): indicaciones, DOSIS, advertencias y efectos adversos. Es la fuente
+    de información de medicamentos del sistema (reemplaza al vademecum local).
+    El nombre de la droga debe ir en INGLÉS (ej: 'metformin', 'enalapril', 'losartan').
+
+    Args:
+        nombre_droga: nombre genérico del medicamento en inglés.
+    Returns:
+        Indicaciones, dosis, advertencias y efectos adversos (en inglés → resumir
+        en español para el usuario).
+    """
+    url = "https://api.fda.gov/drug/label.json"
+    params = {"search": f'openfda.generic_name:"{nombre_droga}"', "limit": 1}
+
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if not data.get("results"):
+            return f"No se encontró información de '{nombre_droga}' en OpenFDA (probá el nombre en inglés)."
+
+        drug = data["results"][0]
+
+        def extraer(campo: str, max_chars: int = 500) -> str:
+            texto = drug.get(campo, ["No disponible"])
+            contenido = texto[0] if isinstance(texto, list) else str(texto)
+            return contenido[:max_chars] + "..." if len(contenido) > max_chars else contenido
+
+        nombre = drug.get("openfda", {}).get("brand_name", ["Desconocido"])
+        nombre_str = nombre[0] if isinstance(nombre, list) else nombre
+
+        return (
+            f"=== {nombre_droga.upper()} (Marca: {nombre_str}) — fuente OpenFDA ===\n\n"
+            f"INDICACIONES:\n{extraer('indications_and_usage')}\n\n"
+            f"DOSIS:\n{extraer('dosage_and_administration')}\n\n"
+            f"ADVERTENCIAS:\n{extraer('warnings')}\n\n"
+            f"EFECTOS ADVERSOS:\n{extraer('adverse_reactions')}"
+        )
+
+    except requests.RequestException as e:
+        return f"Error al consultar OpenFDA: {str(e)}"
 
 
 # =============================================================================
@@ -1186,8 +949,8 @@ tools_medico = [
     aprobar_solicitud,
     rechazar_solicitud,
     cancelar_dia_completo,          # Cancelar todos los turnos de un día
-    consultar_vademecum,
-    buscar_pubmed,                  # Búsqueda de literatura médica
+    buscar_pubmed,                  # Búsqueda de literatura médica (con abstracts)
+    buscar_medicamento,             # Info de medicamentos vía OpenFDA (FDA)
     info_paciente,
     buscar_paciente,
     pacientes_sin_control,
@@ -1218,8 +981,8 @@ if __name__ == "__main__":
     print("\n--- Test: mis_turnos ---")
     print(mis_turnos.invoke({"paciente_id": 1}))
 
-    print("\n--- Test: consultar_vademecum ---")
-    print(consultar_vademecum.invoke({"medicamento": "metformina"}))
+    print("\n--- Test: buscar_medicamento (OpenFDA) ---")
+    print(buscar_medicamento.invoke({"nombre_droga": "metformin"}))
 
     print("\n--- Test: ver_solicitudes_pendientes ---")
     print(ver_solicitudes_pendientes.invoke({}))

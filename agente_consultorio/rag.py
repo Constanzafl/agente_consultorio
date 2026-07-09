@@ -21,8 +21,17 @@ Uso:
 =============================================================================
 """
 
+import sys
 import shutil
 import pathlib
+
+# Fuerza la consola a UTF-8 en Windows (evita que caracteres raros de los PDF
+# rompan al imprimir). Así no hace falta setear PYTHONUTF8 a mano.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from langchain.tools import tool
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -34,7 +43,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent
 DIR_GUIAS = RAIZ / "data" / "guias_pdf"
 DIR_CHROMA = RAIZ / "chroma_db"
 
-MODELO_EMBED = "sentence-transformers/all-mpnet-base-v2"  # mismo que usó la clase
+MODELO_EMBED = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # sentence-transformers/all-mpnet-base-v2
 COLECCION = "guias_clinicas"
 
 # Cache en memoria para no recargar el modelo ni la base en cada llamada
@@ -80,23 +89,31 @@ def construir_indice(forzar: bool = False):
         collection_name=COLECCION,
         persist_directory=str(DIR_CHROMA),
     )
+    # Dejamos anotado con qué modelo se construyó (para detectar cambios de modelo)
+    (DIR_CHROMA / ".modelo_embed").write_text(MODELO_EMBED, encoding="utf-8")
     return vs, len(fragmentos)
 
 
 def get_vectorstore():
-    """Devuelve el vectorstore: lo carga de disco si existe, o lo construye."""
+    """Devuelve el vectorstore: lo carga de disco si existe. Si el índice se armó
+    con OTRO modelo de embeddings (dimensiones distintas), lo reconstruye solo."""
     global _vectorstore
     if _vectorstore is not None:
         return _vectorstore
 
-    if DIR_CHROMA.exists() and any(DIR_CHROMA.iterdir()):
+    marcador = DIR_CHROMA / ".modelo_embed"
+    modelo_previo = marcador.read_text(encoding="utf-8").strip() if marcador.exists() else None
+    indice_ok = DIR_CHROMA.exists() and any(DIR_CHROMA.iterdir())
+
+    if indice_ok and modelo_previo == MODELO_EMBED:
         _vectorstore = Chroma(
             collection_name=COLECCION,
             embedding_function=get_embeddings(),
             persist_directory=str(DIR_CHROMA),
         )
     else:
-        _vectorstore, _ = construir_indice()
+        # No existe, o cambió el modelo de embeddings -> reconstruir de cero
+        _vectorstore, _ = construir_indice(forzar=True)
     return _vectorstore
 
 

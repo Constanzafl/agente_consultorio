@@ -4,12 +4,14 @@ AGENTE CONSULTORIO MÉDICO — Fase 2: Grafo LangGraph multi-agente
 =============================================================================
 Arquitectura:
 
-    START -> orquestador -> (agente_paciente | agente_medico) -> tools -> ... -> END
+    START -> guardarrail -> orquestador -> (agente_paciente | agente_medico) -> tools -> ... -> END
+                    └── si URGENCIA -> END (escala, no sigue el flujo)
 
+  - guardarrail   : primer filtro. Detecta urgencias médicas y escala (911/guardia).
   - orquestador   : rutea por ROL. Si la UI pasa el rol lo usa directo;
                     si no, un LLM lo clasifica según el mensaje (híbrido).
   - agente_paciente: 10 tools (turnos, recetas, consultas, memoria).
-  - agente_medico  : 12 tools (agenda, aprobar/rechazar, vademecum, PubMed).
+  - agente_medico  : tools de agenda, aprobar/rechazar, medicamentos (OpenFDA), PubMed.
   - Cada agente tiene su loop agente <-> ToolNode hasta que deja de pedir tools.
 
 Memoria de CORTO plazo: MemorySaver (checkpointer) por thread_id.
@@ -20,25 +22,38 @@ LLM con failover multi-proveedor: ver llm.py (LM Studio local -> Gemini -> Groq 
 =============================================================================
 """
 
+import sys
 from typing import Optional
-from langchain_core.messages import SystemMessage, HumanMessage
+from datetime import datetime
+
+# Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 # Imports robustos: funciona corriendo el archivo directo o como paquete
 try:
-    from .db_y_tools import tools_paciente, tools_medico
+    from .tools import tools_paciente, tools_medico
     from .llm import crear_llm, proveedores_disponibles
     from .rag import consultar_guias
+    from .guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
+    from .skills_loader import cargar_skill, bloque_skills_para_prompt
 except ImportError:
-    from db_y_tools import tools_paciente, tools_medico
+    from tools import tools_paciente, tools_medico
     from llm import crear_llm, proveedores_disponibles
     from rag import consultar_guias
+    from guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
+    from skills_loader import cargar_skill, bloque_skills_para_prompt
 
-# La tool de RAG (guías clínicas) la usan ambos agentes
-tools_paciente = tools_paciente + [consultar_guias]
-tools_medico = tools_medico + [consultar_guias]
+# Tools transversales que usan ambos agentes: RAG de guías y carga de skills
+tools_paciente = tools_paciente + [consultar_guias, cargar_skill]
+tools_medico = tools_medico + [consultar_guias, cargar_skill]
 
 
 # =============================================================================
@@ -49,6 +64,7 @@ class EstadoConsultorio(MessagesState):
     """Estado compartido. MessagesState ya aporta `messages` (con add_messages)."""
     rol: str                        # "paciente" | "medico" | ""
     paciente_id: Optional[int]      # id del paciente en contexto (si se conoce)
+    urgencia: bool                  # True si el guardarrail detectó una urgencia
 
 
 # =============================================================================
@@ -58,7 +74,7 @@ class EstadoConsultorio(MessagesState):
 PROMPT_ROUTER = (
     "Sos un clasificador de un consultorio médico. Según el mensaje, decidí si "
     "quien escribe es un PACIENTE (pide turnos, recetas, dudas sobre su medicación) "
-    "o el MÉDICO (gestiona su agenda, aprueba recetas, consulta vademecum o evidencia). "
+    "o el MÉDICO (gestiona su agenda, aprueba recetas, consulta medicamentos o evidencia). "
     "Respondé UNA sola palabra en minúscula: paciente o medico."
 )
 
@@ -68,31 +84,57 @@ PROMPT_PACIENTE = (
     "Para dudas sobre hábitos saludables o el manejo de enfermedades crónicas (HTA, DM2, etc.), "
     "usá la tool `consultar_guias` (busca en guías clínicas) y respondé SOLO con lo que traiga.\n\n"
     "REGLAS (guardarrailes):\n"
-    "1. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
-    "2. Las recetas y consultas SIEMPRE quedan PENDIENTES de aprobación del médico (nunca las das por aprobadas).\n"
-    "3. Ante señales de URGENCIA (dolor de pecho, dificultad para respirar, pérdida de conocimiento, "
+    "1. Para BUSCAR información (consultar_guias, cargar_skill, ver turnos) "
+    "llamá la tool DIRECTAMENTE, sin pedir permiso ni anunciar que la vas a usar. No preguntes "
+    "'¿te parece bien?': simplemente usala y respondé con el resultado.\n"
+    "2. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
+    "3. Las recetas y consultas SIEMPRE quedan PENDIENTES de aprobación del médico (nunca las das por aprobadas).\n"
+    "4. Ante señales de URGENCIA (dolor de pecho, dificultad para respirar, pérdida de conocimiento, "
     "déficit neurológico, sangrado importante), NO uses tools: indicá llamar al 911 o ir a una guardia YA.\n"
-    "4. Confirmá con el paciente antes de acciones que modifican datos (sacar/cancelar turno, solicitar receta).\n"
-    "5. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool.\n"
-    "6. Sé cálido, claro y breve."
+    "5. Pedí confirmación SOLO antes de acciones que MODIFICAN datos (sacar/cancelar turno, solicitar receta).\n"
+    "6. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool que escribe.\n"
+    "7. Sé cálido, claro y breve. No uses emojis."
 )
 
 PROMPT_MEDICO = (
     "Sos el asistente del MÉDICO en un consultorio de medicina familiar.\n"
     "Podés: mostrar la agenda del día, revisar y aprobar/rechazar solicitudes de pacientes, "
-    "consultar el vademecum, buscar evidencia en PubMed y hacer seguimiento de crónicos.\n\n"
+    "consultar medicamentos (OpenFDA), buscar evidencia en PubMed y hacer seguimiento de crónicos.\n\n"
     "REGLAS:\n"
-    "1. Presentá la información de forma precisa y accionable; el médico decide.\n"
+    "1. Para BUSCAR información (medicamentos, guías, PubMed, agenda, historial) llamá la tool "
+    "DIRECTAMENTE, sin pedir permiso ni anunciarlo. Presentá el resultado de forma precisa.\n"
     "2. Para aprobar/rechazar una solicitud, confirmá cuál (por ID) antes de ejecutar.\n"
-    "3. Si te piden evidencia clínica, usá PubMed con términos en inglés.\n"
-    "4. Para recomendaciones basadas en guías (HTA, DM2, hábitos), usá `consultar_guias`.\n"
-    "5. No inventes datos de vademecum: si la tool no lo encuentra, decilo."
+    "3. Si te piden evidencia clínica, usá `buscar_pubmed` con términos en inglés. Después, "
+    "escribí un RESUMEN EN ESPAÑOL (3-5 oraciones) de lo que dicen los abstracts, y recién "
+    "al final listá los artículos como fuentes (título + link). No traduzcas literal: sintetizá.\n"
+    "4. Para info de un medicamento usá `buscar_medicamento` (OpenFDA; el nombre en inglés) "
+    "y resumí en español las indicaciones, dosis, advertencias y efectos adversos.\n"
+    "5. Para recomendaciones basadas en guías (HTA, DM2, hábitos), usá `consultar_guias`.\n"
+    "6. No inventes datos: si una tool no encuentra algo, decilo.\n"
+    "7. No uses emojis."
 )
 
 
 # =============================================================================
 # 3. NODOS
 # =============================================================================
+
+def _guardarrail_entrada(state: EstadoConsultorio) -> dict:
+    """PRIMER filtro: si el mensaje describe una urgencia, escala y corta el flujo."""
+    ultimo_humano = next(
+        (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        "",
+    )
+    if detectar_urgencia(str(ultimo_humano)):
+        # Devuelve el mensaje de escalada y marca urgencia (el router corta acá)
+        return {"messages": [AIMessage(content=MENSAJE_URGENCIA)], "urgencia": True}
+    return {"urgencia": False}
+
+
+def _ruta_guardarrail(state: EstadoConsultorio) -> str:
+    """Si hubo urgencia, va directo a END (no pasa por los agentes)."""
+    return END if state.get("urgencia") else "orquestador"
+
 
 def _orquestar(state: EstadoConsultorio, llm_router) -> dict:
     """Ruteo híbrido: usa el rol si vino de la UI; si no, lo clasifica el LLM."""
@@ -112,9 +154,22 @@ def _orquestar(state: EstadoConsultorio, llm_router) -> dict:
     return {"rol": "medico" if "medico" in texto else "paciente"}
 
 
+_DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+
 def _nodo_agente(state: EstadoConsultorio, llm_con_tools, system_prompt: str) -> dict:
     """Nodo genérico de agente: arma el prompt de sistema + contexto e invoca el LLM."""
     prompt = system_prompt
+    # El LLM no sabe qué día es: se lo decimos para que resuelva 'hoy', 'mañana', etc.
+    hoy = datetime.now()
+    prompt += (
+        f"\n\nFECHA DE HOY: {hoy.strftime('%Y-%m-%d')} ({_DIAS[hoy.weekday()]}). "
+        "Usá esta fecha para interpretar 'hoy', 'mañana', 'la semana que viene', etc. "
+        "Calculá la fecha exacta (YYYY-MM-DD) antes de llamar cualquier tool de agenda/turnos."
+    )
+    bloque_skills = bloque_skills_para_prompt()
+    if bloque_skills:
+        prompt += "\n\n" + bloque_skills
     if state.get("paciente_id"):
         prompt += (
             f"\n\nContexto: el paciente en conversación tiene paciente_id="
@@ -157,13 +212,19 @@ def construir_grafo(checkpointer=None):
 
     g = StateGraph(EstadoConsultorio)
 
+    g.add_node("guardarrail", _guardarrail_entrada)
     g.add_node("orquestador", lambda s: _orquestar(s, llm_router))
     g.add_node("agente_paciente", lambda s: _nodo_agente(s, llm_paciente, PROMPT_PACIENTE))
     g.add_node("agente_medico", lambda s: _nodo_agente(s, llm_medico, PROMPT_MEDICO))
     g.add_node("tools_paciente", ToolNode(tools_paciente))
     g.add_node("tools_medico", ToolNode(tools_medico))
 
-    g.add_edge(START, "orquestador")
+    # Todo entra primero por el guardarrail; si hay urgencia, corta en END.
+    g.add_edge(START, "guardarrail")
+    g.add_conditional_edges(
+        "guardarrail", _ruta_guardarrail,
+        {"orquestador": "orquestador", END: END},
+    )
     g.add_conditional_edges(
         "orquestador", _ruta_rol,
         {"agente_paciente": "agente_paciente", "agente_medico": "agente_medico"},

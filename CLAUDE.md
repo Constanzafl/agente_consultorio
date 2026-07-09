@@ -8,7 +8,7 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
 ## Arquitectura
 - **Orquestador**: rutea entre agente paciente y agente médico según el rol del usuario
 - **Agente paciente** (10 tools): turnos, registro, recetas, consultas, hábitos saludables
-- **Agente médico** (12 tools): agenda, aprobar/rechazar solicitudes, vademecum, PubMed, seguimiento crónicos
+- **Agente médico**: agenda, aprobar/rechazar solicitudes, medicamentos (OpenFDA), PubMed, seguimiento crónicos
 - **Human-in-the-loop**: todo lo que genera el agente paciente (recetas, respuestas) queda pendiente para aprobación del médico
 
 ## Decisión de arquitectura (importante)
@@ -30,16 +30,17 @@ Por eso:
   (Gemini free tier → Groq → HuggingFace) vía `llm.py`. Ver failover multi-proveedor.
 - Embeddings: HuggingFace `sentence-transformers/all-mpnet-base-v2`
 - Vector store: ChromaDB
-- Base de datos: SQLite (7 tablas: pacientes, agenda_medico, turnos, medicamentos, solicitudes, historial_conversaciones)
+- Base de datos: SQLite (6 tablas: pacientes, agenda_medico, turnos, solicitudes, historial_conversaciones)
+- Info de medicamentos: OpenFDA (API FDA, gratis) — NO se guarda en la DB (sin vademecum que mantener)
 - Orquestación: LangGraph + LangChain
 - UI: Chainlit (al final)
 - API externa: PubMed E-utilities (gratis)
 
 ## Requisitos del TP que hay que cubrir
-1. **RAG** — Guías clínicas PDF (HTA, DM2, hábitos). El vademecum NO va por RAG:
-   queda como tool de SQLite (`consultar_vademecum`) porque es data estructurada
-   (dosis exactas, contraindicaciones) donde RAG perdería precisión.
-2. **Herramientas** — Las 22 tools en `db_y_tools.py`
+1. **RAG** — Guías clínicas PDF (HTA, DM2, hábitos). La info de medicamentos NO va
+   por RAG ni por DB local: se consulta en vivo con la tool `buscar_medicamento`
+   (OpenFDA), así no hay vademecum que mantener a mano.
+2. **Herramientas** — Las tools en `tools.py` (incluye APIs externas: PubMed + OpenFDA)
 3. **Guardarrailes** — No diagnosticar, escalar urgencias, validar datos, confirmar acciones
 4. **Evaluación** — Pipeline con casos de prueba funcionales, RAG y guardarrailes
 5. **Múltiples agentes** (plus) — Orquestador + 2 subagentes
@@ -56,16 +57,26 @@ Por eso:
 - ✅ Fase 3: RAG con guías clínicas (`rag.py`): PDFs en data/guias_pdf/ → chunks →
   embeddings HF all-mpnet-base-v2 → ChromaDB (chroma_db/). Tool `consultar_guias`
   integrada en agente paciente y médico. Reindexar: `python agente_consultorio/rag.py`
-- ⬜ Fase 4: Guardarrailes
-- ⬜ Fase 5: Skills (`skills/`) + subagente PubMed estilo Deep Agents + Tier 2
-  (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)
-- ⬜ Fase 6: Evaluación
-- ⬜ Fase 7: UI Chainlit + video
+- ✅ Fase 4: Guardarrailes (`guardarrailes.py`). Detector de URGENCIAS por palabras
+  clave, integrado como primer nodo del grafo (`guardarrail`): si detecta urgencia,
+  escala (911/guardia) y corta el flujo sin llamar a los agentes. Resto de
+  guardarrailes (no diagnosticar, confirmar, validar) en prompts y tools.
+- 🟡 Fase 5 (en curso):
+  - ✅ Skills: carpeta `skills/*.md` (playbooks) + `skills_loader.py` (tool
+    `cargar_skill` + lista inyectada en prompts). Progressive disclosure sobre LangGraph.
+  - ⬜ Subagente PubMed estilo Deep Agents (búsqueda de evidencia)
+  - ⬜ Tier 2 (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)
+- ✅ Fase 6: Evaluación (`tests/test_evaluacion.py`). 3 bloques: funcionales (tools),
+  guardarrailes (urgencias) — deterministas — y LLM-as-judge (estilo Clase 2) que
+  evalúa respuestas del agente. Correr: `python tests/test_evaluacion.py`
+- 🟡 Fase 7: UI Chainlit (`app.py`) lista — chat web con perfiles Paciente/Médico
+  que envuelve el grafo. Correr: `chainlit run app.py`. Falta: grabar el video.
 
 ## Estructura del repo
 ```
 agente_consultorio/
-├── db_y_tools.py        # Fase 1 — DB schema + todas las tools
+├── db.py                # Fase 1 — DB schema + datos + conexión `conn`
+├── tools.py             # Fase 1 — las 22 tools (@tool), usan `conn` de db.py
 ├── llm.py               # Fase 2 — Factory de LLM con failover multi-proveedor
 ├── grafo.py             # Fase 2 — LangGraph multi-agente
 ├── rag.py               # Fase 3 — RAG guías clínicas
@@ -82,12 +93,13 @@ data/
 ## Contexto médico
 Pensado para un médico de familia que atiende pacientes con enfermedades crónicas:
 HTA (hipertensión), DM2 (diabetes tipo 2), obesidad, dislipemia.
-El vademecum incluye: Metformina, Enalapril, Losartán, Atorvastatina, Amlodipina, Glimepirida, Hidroclorotiazida, Insulina Glargina.
+Drogas típicas: Metformina, Enalapril, Losartán, Atorvastatina, Amlodipina, Glimepirida,
+Hidroclorotiazida, Insulina Glargina. La info se consulta en OpenFDA (`buscar_medicamento`, nombre en inglés).
 
 ## Convenciones
 - Todas las tools usan `@tool` de LangChain
 - SQLite con `check_same_thread=False` para compatibilidad con LangGraph
-- Búsqueda de medicamentos por nombre (LIKE) no por ID exacto
+- Info de medicamentos vía OpenFDA (`buscar_medicamento`), con el nombre de la droga en inglés
 - Fechas en formato YYYY-MM-DD, horas en HH:MM
 - Las tools devuelven strings de texto plano (sin emojis; rompen la consola cp1252 en Windows)
 - En Windows, correr con `PYTHONUTF8=1` (los emojis rompen la consola cp1252)
