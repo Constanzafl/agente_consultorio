@@ -48,6 +48,7 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
             telefono TEXT,
             email TEXT,
             obra_social TEXT,
+            plan TEXT,                -- Plan dentro de la obra social (ej: "210", "Plata")
             numero_afiliado TEXT,
             patologias TEXT,          -- Ej: "HTA,DM2,Obesidad" (separadas por coma)
             medicacion_actual TEXT,   -- Ej: "Metformina 850mg c/12hs, Enalapril 10mg c/24hs"
@@ -57,15 +58,28 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
         )
     """)
 
-    # --- AGENDA DEL MÉDICO (horarios disponibles por día de semana) ---
+    # --- MÉDICOS del centro ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS medicos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            apellido TEXT NOT NULL,
+            especialidad TEXT,
+            activo INTEGER DEFAULT 1
+        )
+    """)
+
+    # --- AGENDA (horarios disponibles por médico y día de semana) ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agenda_medico (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dia_semana INTEGER NOT NULL,   -- 0=Lunes, 1=Martes, ..., 4=Viernes
+            medico_id INTEGER NOT NULL,     -- de qué médico es este horario
+            dia_semana INTEGER NOT NULL,    -- 0=Lunes, 1=Martes, ..., 4=Viernes
             hora_inicio TEXT NOT NULL,      -- Ej: "09:00"
             hora_fin TEXT NOT NULL,         -- Ej: "09:30" (turnos de 30 min)
             activo INTEGER DEFAULT 1,
-            UNIQUE(dia_semana, hora_inicio)  -- evita franjas duplicadas
+            UNIQUE(medico_id, dia_semana, hora_inicio),  -- evita franjas duplicadas
+            FOREIGN KEY (medico_id) REFERENCES medicos(id)
         )
     """)
 
@@ -74,6 +88,7 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS turnos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             paciente_id INTEGER NOT NULL,
+            medico_id INTEGER NOT NULL,     -- con qué médico es el turno
             fecha TEXT NOT NULL,            -- "2025-07-15"
             hora TEXT NOT NULL,             -- "09:00"
             motivo TEXT,                    -- "Control DM2", "Seguimiento HTA", "Primera consulta"
@@ -82,7 +97,8 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
             recordatorio_enviado INTEGER DEFAULT 0,
             notas TEXT,
             fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
-            FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
+            FOREIGN KEY (paciente_id) REFERENCES pacientes(id),
+            FOREIGN KEY (medico_id) REFERENCES medicos(id)
         )
     """)
 
@@ -94,6 +110,7 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS solicitudes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             paciente_id INTEGER NOT NULL,
+            medico_id INTEGER,             -- médico al que va dirigida la solicitud
             tipo TEXT NOT NULL,            -- "receta", "formulario_prodiaba", "consulta_medica", "respuesta_borrador"
             estado TEXT DEFAULT 'pendiente', -- "pendiente", "aprobada", "rechazada", "completada"
             descripcion TEXT,              -- Detalle de lo que se solicita
@@ -104,7 +121,8 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
             respuesta_medico TEXT,         -- Respuesta/nota del médico
             fecha_creacion TEXT DEFAULT (datetime('now', 'localtime')),
             fecha_resolucion TEXT,
-            FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
+            FOREIGN KEY (paciente_id) REFERENCES pacientes(id),
+            FOREIGN KEY (medico_id) REFERENCES medicos(id)
         )
     """)
 
@@ -142,53 +160,59 @@ def cargar_datos_ejemplo(conn: sqlite3.Connection):
     if cursor.fetchone()[0] > 0:
         return
 
-    # --- Pacientes ---
+    # --- Pacientes (con PLAN además de obra social) ---
     pacientes = [
         ("María", "González", "30123456", "1975-03-15", "+5491155551234",
-         "maria.gonzalez@email.com", "OSDE", "12345678",
+         "maria.gonzalez@email.com", "OSDE", "210", "12345678",
          "HTA,DM2", "Metformina 850mg c/12hs, Enalapril 10mg c/24hs", "2025-04-10"),
         ("Carlos", "Rodríguez", "28987654", "1970-08-22", "+5491155555678",
-         "carlos.rod@email.com", "Swiss Medical", "87654321",
+         "carlos.rod@email.com", "Swiss Medical", "SMG20", "87654321",
          "HTA,Obesidad,Dislipemia", "Losartán 50mg c/24hs, Atorvastatina 20mg c/24hs", "2025-01-15"),
         ("Ana", "Martínez", "35456789", "1985-11-03", "+5491155559012",
-         "ana.martinez@email.com", "OSDE", "11223344",
+         "ana.martinez@email.com", "OSDE", "310", "11223344",
          "DM2", "Metformina 1000mg c/12hs", "2025-06-01"),
     ]
     cursor.executemany("""
         INSERT OR IGNORE INTO pacientes
         (nombre, apellido, dni, fecha_nacimiento, telefono, email,
-         obra_social, numero_afiliado, patologias, medicacion_actual, fecha_ultima_consulta)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         obra_social, plan, numero_afiliado, patologias, medicacion_actual, fecha_ultima_consulta)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, pacientes)
 
-    # --- Agenda del médico (Lunes a Viernes, turnos de 30 min, 9:00-13:00) ---
-    for dia in range(5):  # 0=Lunes a 4=Viernes
-        for hora in range(9, 13):
-            for minuto in ["00", "30"]:
-                hora_inicio = f"{hora:02d}:{minuto}"
-                if minuto == "00":
-                    hora_fin = f"{hora:02d}:30"
-                else:
-                    hora_fin = f"{hora+1:02d}:00"
-                cursor.execute("""
-                    INSERT OR IGNORE INTO agenda_medico (dia_semana, hora_inicio, hora_fin)
-                    VALUES (?, ?, ?)
-                """, (dia, hora_inicio, hora_fin))
+    # --- Médicos del centro ---
+    medicos = [
+        ("Juan", "Pérez", "Medicina Familiar"),
+        ("Laura", "Gómez", "Cardiología"),
+    ]
+    cursor.executemany("""
+        INSERT OR IGNORE INTO medicos (nombre, apellido, especialidad) VALUES (?, ?, ?)
+    """, medicos)
 
-    # (Sin seed de medicamentos: la info de drogas viene de OpenFDA en vivo.)
+    # --- Agenda de cada médico (Lunes a Viernes, turnos de 30 min, 9:00-13:00) ---
+    cursor.execute("SELECT id FROM medicos")
+    for (medico_id,) in cursor.fetchall():
+        for dia in range(5):  # 0=Lunes a 4=Viernes
+            for hora in range(9, 13):
+                for minuto in ["00", "30"]:
+                    hora_inicio = f"{hora:02d}:{minuto}"
+                    hora_fin = f"{hora:02d}:30" if minuto == "00" else f"{hora+1:02d}:00"
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO agenda_medico (medico_id, dia_semana, hora_inicio, hora_fin)
+                        VALUES (?, ?, ?, ?)
+                    """, (medico_id, dia, hora_inicio, hora_fin))
 
     # --- Turnos de ejemplo ---
-    # Un turno futuro para María
+    # Un turno futuro para María con el Dr. Pérez (medico_id=1)
     cursor.execute("""
-        INSERT OR IGNORE INTO turnos (paciente_id, fecha, hora, motivo, tipo, estado)
-        VALUES (1, '2025-07-20', '09:30', 'Control DM2 y HTA', 'seguimiento', 'confirmado')
+        INSERT OR IGNORE INTO turnos (paciente_id, medico_id, fecha, hora, motivo, tipo, estado)
+        VALUES (1, 1, '2025-07-20', '09:30', 'Control DM2 y HTA', 'seguimiento', 'confirmado')
     """)
 
-    # Una solicitud pendiente
+    # Una solicitud pendiente (dirigida al Dr. Pérez, medico_id=1)
     cursor.execute("""
         INSERT OR IGNORE INTO solicitudes
-        (paciente_id, tipo, descripcion, medicamento, dosis, cantidad)
-        VALUES (1, 'receta', 'Solicitud de receta mensual', 'Metformina 850mg', '1 comprimido cada 12 horas', '2 cajas')
+        (paciente_id, medico_id, tipo, descripcion, medicamento, dosis, cantidad)
+        VALUES (1, 1, 'receta', 'Solicitud de receta mensual', 'Metformina 850mg', '1 comprimido cada 12 horas', '2 cajas')
     """)
 
     # --- Historial de conversaciones de ejemplo ---

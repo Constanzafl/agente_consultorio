@@ -40,6 +40,7 @@ def registrar_paciente(
     email: str,
     obra_social: str,
     numero_afiliado: str,
+    plan: str = "",
     patologias: str = "",
     medicacion_actual: str = ""
 ) -> str:
@@ -56,6 +57,7 @@ def registrar_paciente(
         email: Email del paciente
         obra_social: Nombre de la obra social
         numero_afiliado: Número de afiliado de la obra social
+        plan: Plan dentro de la obra social (ej: "210", "Plata")
         patologias: Patologías separadas por coma (ej: "HTA,DM2")
         medicacion_actual: Medicación actual del paciente
     Returns:
@@ -66,10 +68,10 @@ def registrar_paciente(
         cursor.execute("""
             INSERT INTO pacientes
             (nombre, apellido, dni, fecha_nacimiento, telefono, email,
-             obra_social, numero_afiliado, patologias, medicacion_actual)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             obra_social, plan, numero_afiliado, patologias, medicacion_actual)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (nombre, apellido, dni, fecha_nacimiento, telefono, email,
-              obra_social, numero_afiliado, patologias, medicacion_actual))
+              obra_social, plan, numero_afiliado, patologias, medicacion_actual))
         conn.commit()
         return f"Paciente {nombre} {apellido} (DNI: {dni}) registrado exitosamente con ID #{cursor.lastrowid}."
     except sqlite3.IntegrityError:
@@ -91,7 +93,7 @@ def buscar_paciente(criterio: str) -> str:
     """
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, nombre, apellido, dni, obra_social, patologias,
+        SELECT id, nombre, apellido, dni, obra_social, plan, patologias,
                medicacion_actual, fecha_ultima_consulta
         FROM pacientes
         WHERE activo = 1
@@ -104,9 +106,10 @@ def buscar_paciente(criterio: str) -> str:
 
     respuesta = []
     for p in resultados:
+        os_plan = p['obra_social'] + (f" (plan {p['plan']})" if p['plan'] else "")
         respuesta.append(
             f"• ID #{p['id']}: {p['nombre']} {p['apellido']} | "
-            f"DNI: {p['dni']} | OS: {p['obra_social']} | "
+            f"DNI: {p['dni']} | OS: {os_plan} | "
             f"Patologías: {p['patologias'] or 'Ninguna registrada'} | "
             f"Última consulta: {p['fecha_ultima_consulta'] or 'Sin registro'}"
         )
@@ -114,13 +117,35 @@ def buscar_paciente(criterio: str) -> str:
 
 
 @tool
-def consultar_agenda(fecha: str) -> str:
+def listar_medicos() -> str:
     """
-    Consulta los horarios disponibles del médico para una fecha específica.
-    Muestra solo los turnos que NO están ocupados.
+    Lista los médicos del centro con su especialidad e ID. Útil para que el paciente
+    elija con qué médico sacar turno.
+
+    Returns:
+        Lista de médicos disponibles.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre, apellido, especialidad FROM medicos WHERE activo = 1 ORDER BY id")
+    medicos = cursor.fetchall()
+    if not medicos:
+        return "No hay médicos cargados en el sistema."
+    return "Médicos del centro:\n" + "\n".join(
+        f"  • ID #{m['id']}: Dr/a. {m['nombre']} {m['apellido']} — {m['especialidad'] or 'Clínica'}"
+        for m in medicos
+    )
+
+
+@tool
+def consultar_agenda(fecha: str, medico_id: int) -> str:
+    """
+    Consulta los horarios disponibles de un médico para una fecha específica.
+    Muestra solo los turnos que NO están ocupados. Si no sabés el medico_id,
+    usá primero listar_medicos.
 
     Args:
         fecha: Fecha en formato YYYY-MM-DD
+        medico_id: ID del médico cuya agenda se consulta
     Returns:
         Lista de horarios disponibles o mensaje si no hay
     """
@@ -129,38 +154,41 @@ def consultar_agenda(fecha: str) -> str:
         dia_semana = fecha_dt.weekday()  # 0=Lunes
 
         if dia_semana >= 5:
-            return f"El médico no atiende los fines de semana. La fecha {fecha} es un {'sábado' if dia_semana == 5 else 'domingo'}."
+            return f"No se atiende los fines de semana. La fecha {fecha} es un {'sábado' if dia_semana == 5 else 'domingo'}."
 
         cursor = conn.cursor()
+        cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+        medico = cursor.fetchone()
+        if not medico:
+            return f"No existe un médico con ID #{medico_id}. Usá listar_medicos para ver las opciones."
 
-        # Horarios de agenda para ese día
+        # Horarios de agenda de ESE médico para ese día
         cursor.execute("""
             SELECT hora_inicio, hora_fin FROM agenda_medico
-            WHERE dia_semana = ? AND activo = 1
+            WHERE medico_id = ? AND dia_semana = ? AND activo = 1
             ORDER BY hora_inicio
-        """, (dia_semana,))
+        """, (medico_id, dia_semana))
         horarios_agenda = cursor.fetchall()
 
-        # Turnos ya tomados en esa fecha
+        # Turnos ya tomados de ESE médico en esa fecha
         cursor.execute("""
             SELECT hora FROM turnos
-            WHERE fecha = ? AND estado = 'confirmado'
-        """, (fecha,))
+            WHERE medico_id = ? AND fecha = ? AND estado = 'confirmado'
+        """, (medico_id, fecha))
         horas_ocupadas = {row['hora'] for row in cursor.fetchall()}
 
-        disponibles = []
-        for h in horarios_agenda:
-            if h['hora_inicio'] not in horas_ocupadas:
-                disponibles.append(f"  {h['hora_inicio']} - {h['hora_fin']}")
+        disponibles = [f"  {h['hora_inicio']} - {h['hora_fin']}"
+                       for h in horarios_agenda if h['hora_inicio'] not in horas_ocupadas]
 
         dia_nombre = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"][dia_semana]
+        medico_str = f"Dr/a. {medico['nombre']} {medico['apellido']}"
 
         if not disponibles:
-            return f"No hay turnos disponibles para el {dia_nombre} {fecha}. Todos los horarios están ocupados."
+            return f"No hay turnos disponibles con {medico_str} el {dia_nombre} {fecha}."
 
         return (
-            f"Horarios disponibles para el {dia_nombre} {fecha} "
-            f"({len(disponibles)} turnos libres):\n" + "\n".join(disponibles)
+            f"Horarios disponibles con {medico_str} el {dia_nombre} {fecha} "
+            f"({len(disponibles)} libres):\n" + "\n".join(disponibles)
         )
     except ValueError:
         return "Formato de fecha inválido. Usá YYYY-MM-DD (ejemplo: 2025-07-15)."
@@ -169,17 +197,19 @@ def consultar_agenda(fecha: str) -> str:
 @tool
 def sacar_turno(
     paciente_id: int,
+    medico_id: int,
     fecha: str,
     hora: str,
     motivo: str,
     tipo: str = "seguimiento"
 ) -> str:
     """
-    Agenda un turno para un paciente en una fecha y hora específicas.
+    Agenda un turno para un paciente con un médico en una fecha y hora específicas.
     Verifica que el horario esté disponible antes de agendar.
 
     Args:
         paciente_id: ID del paciente en el sistema
+        medico_id: ID del médico con quien se saca el turno (ver listar_medicos)
         fecha: Fecha del turno en formato YYYY-MM-DD
         hora: Hora del turno en formato HH:MM (ej: "09:30")
         motivo: Motivo de la consulta (ej: "Control DM2", "Chequeo anual")
@@ -195,38 +225,44 @@ def sacar_turno(
     if not paciente:
         return f"No se encontró un paciente activo con ID #{paciente_id}."
 
-    # Verificar que no haya otro turno en esa fecha/hora
+    # Verificar que el médico existe
+    cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+    medico = cursor.fetchone()
+    if not medico:
+        return f"No existe un médico con ID #{medico_id}. Usá listar_medicos para ver las opciones."
+
+    # Verificar que ese médico no tenga otro turno en esa fecha/hora
     cursor.execute("""
         SELECT id FROM turnos
-        WHERE fecha = ? AND hora = ? AND estado = 'confirmado'
-    """, (fecha, hora))
+        WHERE medico_id = ? AND fecha = ? AND hora = ? AND estado = 'confirmado'
+    """, (medico_id, fecha, hora))
     if cursor.fetchone():
-        return f"El horario {hora} del {fecha} ya está ocupado. Consultá la agenda para ver horarios disponibles."
+        return f"El horario {hora} del {fecha} ya está ocupado con ese médico. Consultá la agenda."
 
-    # Verificar que el horario esté dentro de la agenda
+    # Verificar que el horario esté dentro de la agenda de ese médico
     try:
-        fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
-        dia_semana = fecha_dt.weekday()
+        dia_semana = datetime.strptime(fecha, "%Y-%m-%d").weekday()
     except ValueError:
         return "Formato de fecha inválido. Usá YYYY-MM-DD."
 
     cursor.execute("""
         SELECT id FROM agenda_medico
-        WHERE dia_semana = ? AND hora_inicio = ? AND activo = 1
-    """, (dia_semana, hora))
+        WHERE medico_id = ? AND dia_semana = ? AND hora_inicio = ? AND activo = 1
+    """, (medico_id, dia_semana, hora))
     if not cursor.fetchone():
-        return f"El horario {hora} no está dentro de la agenda del médico para ese día."
+        return f"El horario {hora} no está en la agenda de ese médico para ese día."
 
     # Crear el turno
     cursor.execute("""
-        INSERT INTO turnos (paciente_id, fecha, hora, motivo, tipo)
-        VALUES (?, ?, ?, ?, ?)
-    """, (paciente_id, fecha, hora, motivo, tipo))
+        INSERT INTO turnos (paciente_id, medico_id, fecha, hora, motivo, tipo)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (paciente_id, medico_id, fecha, hora, motivo, tipo))
     conn.commit()
 
     return (
         f"Turno confirmado:\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
+        f"  Médico: Dr/a. {medico['nombre']} {medico['apellido']}\n"
         f"  Fecha: {fecha} a las {hora}\n"
         f"  Motivo: {motivo}\n"
         f"  Tipo: {tipo}\n"
@@ -284,10 +320,12 @@ def mis_turnos(paciente_id: int) -> str:
     """
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, fecha, hora, motivo, tipo, estado
-        FROM turnos
-        WHERE paciente_id = ? AND estado = 'confirmado'
-        ORDER BY fecha, hora
+        SELECT t.id, t.fecha, t.hora, t.motivo, t.tipo,
+               m.nombre AS med_nombre, m.apellido AS med_apellido
+        FROM turnos t
+        LEFT JOIN medicos m ON t.medico_id = m.id
+        WHERE t.paciente_id = ? AND t.estado = 'confirmado'
+        ORDER BY t.fecha, t.hora
     """, (paciente_id,))
 
     turnos = cursor.fetchall()
@@ -296,8 +334,9 @@ def mis_turnos(paciente_id: int) -> str:
 
     respuesta = [f"Turnos confirmados ({len(turnos)}):"]
     for t in turnos:
+        medico = f" con Dr/a. {t['med_nombre']} {t['med_apellido']}" if t['med_nombre'] else ""
         respuesta.append(
-            f"  • Turno #{t['id']}: {t['fecha']} a las {t['hora']} — "
+            f"  • Turno #{t['id']}: {t['fecha']} a las {t['hora']}{medico} — "
             f"{t['motivo']} ({t['tipo']})"
         )
     return "\n".join(respuesta)
@@ -306,16 +345,20 @@ def mis_turnos(paciente_id: int) -> str:
 @tool
 def solicitar_receta(
     paciente_id: int,
+    medico_id: int,
     medicamento: str,
     dosis: str,
     cantidad: str
 ) -> str:
     """
-    Permite al paciente solicitar una receta médica.
-    La solicitud queda pendiente hasta que el médico la apruebe.
+    Permite al paciente solicitar una receta médica a un médico específico.
+    La solicitud queda pendiente hasta que ESE médico la apruebe. Si no sabés a
+    qué médico, mostrale las opciones con listar_medicos (usá el médico que lo
+    atiende habitualmente o el de su último turno).
 
     Args:
         paciente_id: ID del paciente
+        medico_id: ID del médico al que va dirigida la receta
         medicamento: Nombre del medicamento (ej: "Metformina 850mg")
         dosis: Posología indicada (ej: "1 comprimido cada 12 horas")
         cantidad: Cantidad de envases solicitados (ej: "2 cajas")
@@ -324,23 +367,27 @@ def solicitar_receta(
     """
     cursor = conn.cursor()
 
-    # Verificar paciente
     cursor.execute("SELECT nombre, apellido FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
     paciente = cursor.fetchone()
     if not paciente:
         return f"No se encontró un paciente activo con ID #{paciente_id}."
 
-    descripcion = f"Solicitud de receta: {medicamento}, {dosis}, {cantidad}"
+    cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+    medico = cursor.fetchone()
+    if not medico:
+        return f"No existe un médico con ID #{medico_id}. Usá listar_medicos para ver las opciones."
 
+    descripcion = f"Solicitud de receta: {medicamento}, {dosis}, {cantidad}"
     cursor.execute("""
-        INSERT INTO solicitudes (paciente_id, tipo, descripcion, medicamento, dosis, cantidad)
-        VALUES (?, 'receta', ?, ?, ?, ?)
-    """, (paciente_id, descripcion, medicamento, dosis, cantidad))
+        INSERT INTO solicitudes (paciente_id, medico_id, tipo, descripcion, medicamento, dosis, cantidad)
+        VALUES (?, ?, 'receta', ?, ?, ?, ?)
+    """, (paciente_id, medico_id, descripcion, medicamento, dosis, cantidad))
     conn.commit()
 
     return (
         f"Solicitud de receta creada (ID #{cursor.lastrowid}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
+        f"  Dirigida a: Dr/a. {medico['nombre']} {medico['apellido']}\n"
         f"  Medicamento: {medicamento}\n"
         f"  Dosis: {dosis}\n"
         f"  Cantidad: {cantidad}\n"
@@ -349,14 +396,16 @@ def solicitar_receta(
 
 
 @tool
-def enviar_consulta_medica(paciente_id: int, consulta: str) -> str:
+def enviar_consulta_medica(paciente_id: int, medico_id: int, consulta: str) -> str:
     """
-    Permite al paciente enviar una consulta menor al médico.
-    El agente genera un borrador de respuesta que el médico debe aprobar.
-    Ideal para dudas sobre medicación, efectos adversos, controles, etc.
+    Permite al paciente enviar una consulta menor a un médico específico.
+    Queda pendiente hasta que ESE médico la revise. Ideal para dudas sobre
+    medicación, efectos adversos, controles, etc. Si no sabés a qué médico,
+    mostrale las opciones con listar_medicos.
 
     Args:
         paciente_id: ID del paciente
+        medico_id: ID del médico al que va dirigida la consulta
         consulta: Texto de la consulta del paciente
     Returns:
         Confirmación de que la consulta fue registrada
@@ -368,15 +417,21 @@ def enviar_consulta_medica(paciente_id: int, consulta: str) -> str:
     if not paciente:
         return f"No se encontró un paciente activo con ID #{paciente_id}."
 
+    cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+    medico = cursor.fetchone()
+    if not medico:
+        return f"No existe un médico con ID #{medico_id}. Usá listar_medicos para ver las opciones."
+
     cursor.execute("""
-        INSERT INTO solicitudes (paciente_id, tipo, descripcion)
-        VALUES (?, 'consulta_medica', ?)
-    """, (paciente_id, consulta))
+        INSERT INTO solicitudes (paciente_id, medico_id, tipo, descripcion)
+        VALUES (?, ?, 'consulta_medica', ?)
+    """, (paciente_id, medico_id, consulta))
     conn.commit()
 
     return (
         f"Consulta registrada (ID #{cursor.lastrowid}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
+        f"  Dirigida a: Dr/a. {medico['nombre']} {medico['apellido']}\n"
         f"  Consulta: {consulta}\n"
         f"  Estado: PENDIENTE — el médico la revisará y responderá."
     )
@@ -387,30 +442,37 @@ def enviar_consulta_medica(paciente_id: int, consulta: str) -> str:
 # =============================================================================
 
 @tool
-def ver_turnos_del_dia(fecha: str = "") -> str:
+def ver_turnos_del_dia(fecha: str = "", medico_id: int = 0) -> str:
     """
-    Muestra los turnos confirmados para un día específico,
-    con la información del paciente incluida.
-    Si no se especifica fecha, muestra los de hoy.
+    Muestra los turnos confirmados de un día, con la info del paciente y de qué
+    médico es cada turno. Si no se especifica fecha, muestra los de hoy.
 
     Args:
         fecha: Fecha en formato YYYY-MM-DD (vacío = hoy)
+        medico_id: filtrar por un médico (0 = todos los médicos)
     Returns:
-        Lista de turnos del día con datos del paciente
+        Lista de turnos del día con datos del paciente y el médico
     """
     if not fecha:
         fecha = datetime.now().strftime("%Y-%m-%d")
 
     cursor = conn.cursor()
-    cursor.execute("""
+    query = """
         SELECT t.id, t.hora, t.motivo, t.tipo,
-               p.nombre, p.apellido, p.dni, p.obra_social,
-               p.patologias, p.medicacion_actual
+               p.nombre, p.apellido, p.dni, p.obra_social, p.plan,
+               p.patologias, p.medicacion_actual,
+               m.nombre AS med_nombre, m.apellido AS med_apellido
         FROM turnos t
         JOIN pacientes p ON t.paciente_id = p.id
+        LEFT JOIN medicos m ON t.medico_id = m.id
         WHERE t.fecha = ? AND t.estado = 'confirmado'
-        ORDER BY t.hora
-    """, (fecha,))
+    """
+    params = [fecha]
+    if medico_id:
+        query += " AND t.medico_id = ?"
+        params.append(medico_id)
+    query += " ORDER BY t.hora"
+    cursor.execute(query, params)
 
     turnos = cursor.fetchall()
     if not turnos:
@@ -418,10 +480,12 @@ def ver_turnos_del_dia(fecha: str = "") -> str:
 
     respuesta = [f"Agenda del {fecha} ({len(turnos)} turnos):"]
     for t in turnos:
+        medico = f"Dr/a. {t['med_nombre']} {t['med_apellido']}" if t['med_nombre'] else "(sin médico)"
+        os_plan = t['obra_social'] + (f" plan {t['plan']}" if t['plan'] else "")
         respuesta.append(
-            f"\n  {t['hora']} — Turno #{t['id']}\n"
+            f"\n  {t['hora']} — Turno #{t['id']} con {medico}\n"
             f"    Paciente: {t['nombre']} {t['apellido']} (DNI: {t['dni']})\n"
-            f"    OS: {t['obra_social']} | Tipo: {t['tipo']}\n"
+            f"    OS: {os_plan} | Tipo: {t['tipo']}\n"
             f"    Motivo: {t['motivo']}\n"
             f"    Patologías: {t['patologias'] or 'Ninguna'}\n"
             f"    Medicación: {t['medicacion_actual'] or 'Ninguna'}"
@@ -430,24 +494,34 @@ def ver_turnos_del_dia(fecha: str = "") -> str:
 
 
 @tool
-def ver_solicitudes_pendientes() -> str:
+def ver_solicitudes_pendientes(medico_id: int = 0) -> str:
     """
-    Muestra todas las solicitudes pendientes de aprobación:
-    recetas, consultas médicas, formularios, etc.
+    Muestra las solicitudes pendientes de aprobación (recetas, consultas).
+    Si se pasa medico_id, muestra SOLO las dirigidas a ese médico (lo habitual:
+    cada médico ve las suyas). Con 0 muestra las de todos.
 
+    Args:
+        medico_id: ID del médico para filtrar sus solicitudes (0 = todas)
     Returns:
         Lista de solicitudes pendientes con detalle
     """
     cursor = conn.cursor()
-    cursor.execute("""
+    query = """
         SELECT s.id, s.tipo, s.descripcion, s.medicamento, s.dosis,
                s.cantidad, s.respuesta_borrador, s.fecha_creacion,
-               p.nombre, p.apellido
+               p.nombre, p.apellido,
+               m.nombre AS med_nombre, m.apellido AS med_apellido
         FROM solicitudes s
         JOIN pacientes p ON s.paciente_id = p.id
+        LEFT JOIN medicos m ON s.medico_id = m.id
         WHERE s.estado = 'pendiente'
-        ORDER BY s.fecha_creacion
-    """)
+    """
+    params = []
+    if medico_id:
+        query += " AND s.medico_id = ?"
+        params.append(medico_id)
+    query += " ORDER BY s.fecha_creacion"
+    cursor.execute(query, params)
 
     solicitudes = cursor.fetchall()
     if not solicitudes:
@@ -455,7 +529,8 @@ def ver_solicitudes_pendientes() -> str:
 
     respuesta = [f"Solicitudes pendientes ({len(solicitudes)}):"]
     for s in solicitudes:
-        detalle = f"\n  Solicitud #{s['id']} ({s['tipo'].upper()})\n"
+        medico = f"Dr/a. {s['med_nombre']} {s['med_apellido']}" if s['med_nombre'] else "(sin médico asignado)"
+        detalle = f"\n  Solicitud #{s['id']} ({s['tipo'].upper()}) — dirigida a {medico}\n"
         detalle += f"    Paciente: {s['nombre']} {s['apellido']}\n"
         detalle += f"    Fecha: {s['fecha_creacion']}\n"
         detalle += f"    Descripción: {s['descripcion']}\n"
@@ -631,7 +706,9 @@ def info_paciente(paciente_id: int) -> str:
         f"  Fecha de nacimiento: {p['fecha_nacimiento']}\n"
         f"  Teléfono: {p['telefono']}\n"
         f"  Email: {p['email']}\n"
-        f"  Obra Social: {p['obra_social']} (Afiliado: {p['numero_afiliado']})\n"
+        f"  Obra Social: {p['obra_social']}"
+        + (f" — Plan {p['plan']}" if p['plan'] else "")
+        + f" (Afiliado: {p['numero_afiliado']})\n"
         f"  Patologías: {p['patologias'] or 'Ninguna registrada'}\n"
         f"  Medicación actual: {p['medicacion_actual'] or 'Ninguna registrada'}\n"
         f"  Última consulta: {p['fecha_ultima_consulta'] or 'Sin registro'}\n"
@@ -933,6 +1010,7 @@ def guardar_resumen_conversacion(
 tools_paciente = [
     registrar_paciente,
     buscar_paciente,
+    listar_medicos,
     consultar_agenda,
     sacar_turno,
     cancelar_turno,
@@ -949,6 +1027,7 @@ tools_medico = [
     aprobar_solicitud,
     rechazar_solicitud,
     cancelar_dia_completo,          # Cancelar todos los turnos de un día
+    listar_medicos,                 # Ver los médicos del centro (y sus IDs)
     buscar_pubmed,                  # Búsqueda de literatura médica (con abstracts)
     buscar_medicamento,             # Info de medicamentos vía OpenFDA (FDA)
     info_paciente,
@@ -970,13 +1049,16 @@ if __name__ == "__main__":
     print("\n--- Test: buscar_paciente ---")
     print(buscar_paciente.invoke({"criterio": "González"}))
 
-    print("\n--- Test: consultar_agenda ---")
+    print("\n--- Test: listar_medicos ---")
+    print(listar_medicos.invoke({}))
+
+    print("\n--- Test: consultar_agenda (Dr #1) ---")
     hoy = datetime.now()
     dias_hasta_lunes = (7 - hoy.weekday()) % 7
     if dias_hasta_lunes == 0:
         dias_hasta_lunes = 7
     proximo_lunes = (hoy + timedelta(days=dias_hasta_lunes)).strftime("%Y-%m-%d")
-    print(consultar_agenda.invoke({"fecha": proximo_lunes}))
+    print(consultar_agenda.invoke({"fecha": proximo_lunes, "medico_id": 1}))
 
     print("\n--- Test: mis_turnos ---")
     print(mis_turnos.invoke({"paciente_id": 1}))

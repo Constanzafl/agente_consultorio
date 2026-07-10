@@ -64,6 +64,7 @@ class EstadoConsultorio(MessagesState):
     """Estado compartido. MessagesState ya aporta `messages` (con add_messages)."""
     rol: str                        # "paciente" | "medico" | ""
     paciente_id: Optional[int]      # id del paciente en contexto (si se conoce)
+    medico_id: Optional[int]        # id del médico logueado (si el rol es medico)
     urgencia: bool                  # True si el guardarrail detectó una urgencia
 
 
@@ -88,12 +89,20 @@ PROMPT_PACIENTE = (
     "llamá la tool DIRECTAMENTE, sin pedir permiso ni anunciar que la vas a usar. No preguntes "
     "'¿te parece bien?': simplemente usala y respondé con el resultado.\n"
     "2. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
-    "3. Las recetas y consultas SIEMPRE quedan PENDIENTES de aprobación del médico (nunca las das por aprobadas).\n"
+    "3. Las recetas y consultas van dirigidas a UN médico específico: preguntá a cuál "
+    "(mostralos con `listar_medicos`, o usá el médico de su último turno). SIEMPRE quedan "
+    "PENDIENTES de aprobación (nunca las das por aprobadas).\n"
     "4. Ante señales de URGENCIA (dolor de pecho, dificultad para respirar, pérdida de conocimiento, "
     "déficit neurológico, sangrado importante), NO uses tools: indicá llamar al 911 o ir a una guardia YA.\n"
     "5. Pedí confirmación SOLO antes de acciones que MODIFICAN datos (sacar/cancelar turno, solicitar receta).\n"
     "6. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool que escribe.\n"
-    "7. Sé cálido, claro y breve. No uses emojis."
+    "7. Para SACAR UN TURNO seguí el skill `ingreso_paciente` (cargalo con cargar_skill): "
+    "identificar al paciente por DNI; si es nuevo, registrarlo; elegir médico (hay varios, "
+    "mostralos con `listar_medicos`); ver horarios y reservar.\n"
+    "8. NO ofrezcas ni sugieras acciones que el paciente no pidió (no propongas sacar recetas "
+    "ni hacer consultas: eso le genera trabajo innecesario al médico). Al terminar, cerrá con "
+    "un simple '¿Necesitás algo más?' SIN dar ejemplos.\n"
+    "9. Sé cálido, claro y breve. No uses emojis."
 )
 
 PROMPT_MEDICO = (
@@ -181,6 +190,13 @@ def _nodo_agente(state: EstadoConsultorio, llm_con_tools, system_prompt: str) ->
             f"\n\nContexto: el paciente en conversación tiene paciente_id="
             f"{state['paciente_id']}. Usalo en las tools que lo requieran sin volver a preguntarlo."
         )
+    if state.get("medico_id"):
+        prompt += (
+            f"\n\nContexto: SOS el médico con medico_id={state['medico_id']}. "
+            "Para 'mi agenda' o 'mis turnos' usá ver_turnos_del_dia con ESE medico_id. "
+            "Para 'mis solicitudes/recetas pendientes' usá ver_solicitudes_pendientes con ESE "
+            "medico_id (así ves SOLO las tuyas). No vuelvas a preguntar qué médico sos."
+        )
     mensajes = [SystemMessage(content=prompt)] + state["messages"]
     respuesta = llm_con_tools.invoke(mensajes)
     return {"messages": [respuesta]}
@@ -254,13 +270,16 @@ def construir_grafo(checkpointer=None):
 # =============================================================================
 
 def chatear(app, texto: str, thread_id: str = "demo",
-            rol: str = "", paciente_id: Optional[int] = None) -> str:
+            rol: str = "", paciente_id: Optional[int] = None,
+            medico_id: Optional[int] = None) -> str:
     """Manda un mensaje al grafo y devuelve la respuesta final en texto."""
     entrada: dict = {"messages": [HumanMessage(content=texto)]}
     if rol:
         entrada["rol"] = rol
     if paciente_id is not None:
         entrada["paciente_id"] = paciente_id
+    if medico_id is not None:
+        entrada["medico_id"] = medico_id
     config = {"configurable": {"thread_id": thread_id}}
     resultado = app.invoke(entrada, config)
     return resultado["messages"][-1].content

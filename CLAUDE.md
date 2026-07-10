@@ -30,7 +30,10 @@ Por eso:
   (Gemini free tier → Groq → HuggingFace) vía `llm.py`. Ver failover multi-proveedor.
 - Embeddings: HuggingFace `sentence-transformers/all-mpnet-base-v2`
 - Vector store: ChromaDB
-- Base de datos: SQLite (6 tablas: pacientes, agenda_medico, turnos, solicitudes, historial_conversaciones)
+- Base de datos: SQLite (7 tablas: pacientes, medicos, agenda_medico, turnos, solicitudes, historial_conversaciones).
+  Varios médicos: agenda, turnos y solicitudes (recetas/consultas) por `medico_id`
+  (cada médico ve lo suyo). Pacientes con obra social + `plan`. En la UI se elige
+  qué médico sos (perfil por médico).
 - Info de medicamentos: OpenFDA (API FDA, gratis) — NO se guarda en la DB (sin vademecum que mantener)
 - Orquestación: LangGraph + LangChain
 - UI: Chainlit (al final)

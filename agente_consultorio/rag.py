@@ -13,10 +13,7 @@ Dos "buscadores" separados según a quién van dirigidas las guías:
 Cada carpeta se indexa en su propia colección de ChromaDB. La info de medicamentos
 NO va por acá (eso es OpenFDA, tool buscar_medicamento).
 
-Uso:
-  1) Poné los PDF en data/guias_pdf/paciente/ y/o data/guias_pdf/medico/
-  2) Reconstruí el índice:  python agente_consultorio/rag.py
-La primera vez descarga el modelo de embeddings.
+
 =============================================================================
 """
 
