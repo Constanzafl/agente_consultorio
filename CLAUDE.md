@@ -54,9 +54,11 @@ Por eso:
   memoria corto plazo (MemorySaver), y `llm.py` con failover multi-proveedor.
   LLM PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado. Cloud (Gemini→Groq→HF)
   como fallback opcional. LangSmith para tracing.
-- ✅ Fase 3: RAG con guías clínicas (`rag.py`): PDFs en data/guias_pdf/ → chunks →
-  embeddings HF all-mpnet-base-v2 → ChromaDB (chroma_db/). Tool `consultar_guias`
-  integrada en agente paciente y médico. Reindexar: `python agente_consultorio/rag.py`
+- ✅ Fase 3: RAG con guías clínicas por AUDIENCIA (`rag.py`). Dos carpetas y dos
+  colecciones: `data/guias_pdf/paciente/` (educación → tool `consultar_guias`, agente
+  paciente) y `data/guias_pdf/medico/` (clínicas profesionales → tool
+  `consultar_guias_medico`, agente médico). Embeddings HF multilingüe → ChromaDB.
+  Reindexar: `python agente_consultorio/rag.py`
 - ✅ Fase 4: Guardarrailes (`guardarrailes.py`). Detector de URGENCIAS por palabras
   clave, integrado como primer nodo del grafo (`guardarrail`): si detecta urgencia,
   escala (911/guardia) y corta el flujo sin llamar a los agentes. Resto de

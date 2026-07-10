@@ -134,7 +134,9 @@ agente-consultorio/
 │   ├── guardarrailes.py      # Fase 4: guardarrail de urgencias
 │   └── skills_loader.py      # Fase 5: skills (playbooks)
 ├── skills/                   # Fase 5: playbooks .md
-├── data/guias_pdf/           # Fase 3: PDFs de guías clínicas
+├── data/guias_pdf/
+│   ├── paciente/             # Fase 3: guías de educación al paciente (RAG paciente)
+│   └── medico/               # Fase 3: guías clínicas profesionales (RAG médico)
 ├── tests/test_evaluacion.py  # Fase 6: pipeline de evaluación
 ├── app.py                    # Fase 7: UI Chainlit
 ├── ver_db.py                 # utilidad: ver el estado de la base

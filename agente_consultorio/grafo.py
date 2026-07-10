@@ -41,19 +41,19 @@ from langgraph.checkpoint.memory import MemorySaver
 try:
     from .tools import tools_paciente, tools_medico
     from .llm import crear_llm, proveedores_disponibles
-    from .rag import consultar_guias
+    from .rag import consultar_guias, consultar_guias_medico
     from .guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
     from .skills_loader import cargar_skill, bloque_skills_para_prompt
 except ImportError:
     from tools import tools_paciente, tools_medico
     from llm import crear_llm, proveedores_disponibles
-    from rag import consultar_guias
+    from rag import consultar_guias, consultar_guias_medico
     from guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
     from skills_loader import cargar_skill, bloque_skills_para_prompt
 
-# Tools transversales que usan ambos agentes: RAG de guías y carga de skills
+# Cada agente usa SU RAG de guías (paciente=educación, médico=clínicas) + skills.
 tools_paciente = tools_paciente + [consultar_guias, cargar_skill]
-tools_medico = tools_medico + [consultar_guias, cargar_skill]
+tools_medico = tools_medico + [consultar_guias_medico, cargar_skill]
 
 
 # =============================================================================
@@ -97,9 +97,13 @@ PROMPT_PACIENTE = (
 )
 
 PROMPT_MEDICO = (
-    "Sos el asistente del MÉDICO en un consultorio de medicina familiar.\n"
+    "Sos el asistente del MÉDICO en un consultorio de medicina familiar. El USUARIO ES el "
+    "médico (un profesional de la salud): respondé en lenguaje TÉCNICO, como apoyo a la "
+    "decisión clínica. NUNCA le digas 'consulte a su médico' ni le hables como si fuera un "
+    "paciente — él ES el médico. Podés dar opciones de tratamiento y de elección de fármacos "
+    "basadas en guías/evidencia (la decisión final es del profesional).\n"
     "Podés: mostrar la agenda del día, revisar y aprobar/rechazar solicitudes de pacientes, "
-    "consultar medicamentos (OpenFDA), buscar evidencia en PubMed y hacer seguimiento de crónicos.\n\n"
+    "consultar medicamentos (OpenFDA), guías clínicas y evidencia en PubMed, seguimiento de crónicos.\n\n"
     "REGLAS:\n"
     "1. Para BUSCAR información (medicamentos, guías, PubMed, agenda, historial) llamá la tool "
     "DIRECTAMENTE, sin pedir permiso ni anunciarlo. Presentá el resultado de forma precisa.\n"
@@ -109,7 +113,9 @@ PROMPT_MEDICO = (
     "al final listá los artículos como fuentes (título + link). No traduzcas literal: sintetizá.\n"
     "4. Para info de un medicamento usá `buscar_medicamento` (OpenFDA; el nombre en inglés) "
     "y resumí en español las indicaciones, dosis, advertencias y efectos adversos.\n"
-    "5. Para recomendaciones basadas en guías (HTA, DM2, hábitos), usá `consultar_guias`.\n"
+    "5. Para decisiones clínicas basadas en guías (tratamiento, elección de fármacos, manejo "
+    "de comorbilidades), usá `consultar_guias_medico` (guías profesionales). Si no hay guías "
+    "cargadas o no alcanzan, complementá con `buscar_pubmed`.\n"
     "6. No inventes datos: si una tool no encuentra algo, decilo.\n"
     "7. No uses emojis."
 )
