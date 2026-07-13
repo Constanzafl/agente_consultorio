@@ -13,6 +13,7 @@ Este módulo contiene:
 import sys
 import sqlite3
 import pathlib
+import threading
 
 # Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
 try:
@@ -247,11 +248,36 @@ def cargar_datos_ejemplo(conn: sqlite3.Connection):
 
 
 # =============================================================================
-# 3. CONEXIÓN GLOBAL (se usa en todas las tools)
+# 3. CONEXIÓN GLOBAL — una por hilo (thread-safe)
 # =============================================================================
+# SQLite NO permite usar la MISMA conexión desde varios hilos a la vez. Como
+# LangGraph corre tools en paralelo (hilos) y Chainlit usa un worker thread,
+# damos a CADA hilo su propia conexión al mismo archivo. Las tools siguen usando
+# `conn` como siempre; el proxy resuelve la conexión del hilo por debajo.
 
-# Inicializar la DB al importar el módulo
-conn = crear_base_de_datos()
-cargar_datos_ejemplo(conn)
+_local = threading.local()
+
+
+def _conexion_del_hilo() -> sqlite3.Connection:
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = sqlite3.connect(DB_PATH_DEFAULT, check_same_thread=False)
+        c.row_factory = sqlite3.Row
+        _local.conn = c
+    return c
+
+
+class _ConexionPorHilo:
+    """Proxy que redirige todo (cursor, execute, commit...) a la conexión del hilo actual."""
+    def __getattr__(self, nombre):
+        return getattr(_conexion_del_hilo(), nombre)
+
+
+# Inicializar la DB (esquema + datos) una sola vez, y exponer el proxy por hilo.
+_bootstrap = crear_base_de_datos()
+cargar_datos_ejemplo(_bootstrap)
+_bootstrap.close()
+
+conn = _ConexionPorHilo()
 
 

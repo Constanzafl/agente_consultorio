@@ -195,6 +195,53 @@ def consultar_agenda(fecha: str, medico_id: int) -> str:
 
 
 @tool
+def disponibilidad_semana(medico_id: int, desde: str = "") -> str:
+    """
+    Muestra en UNA sola consulta qué días de los próximos 7 tiene turnos LIBRES un médico.
+    Útil para '¿qué días hay turno esta semana con el Dr X?'. Si desde está vacío, arranca
+    hoy. Después usá consultar_agenda para ver los horarios exactos de un día puntual.
+
+    Args:
+        medico_id: ID del médico
+        desde: fecha de inicio YYYY-MM-DD (vacío = hoy)
+    Returns:
+        Un renglón por día con la cantidad de turnos libres.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+    medico = cursor.fetchone()
+    if not medico:
+        return f"No existe un médico con ID #{medico_id}. Usá listar_medicos."
+    try:
+        base = datetime.strptime(desde, "%Y-%m-%d") if desde else datetime.now()
+    except ValueError:
+        return "Formato de fecha inválido. Usá YYYY-MM-DD."
+
+    dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    lineas = [f"Disponibilidad de Dr/a. {medico['nombre']} {medico['apellido']} "
+              f"(7 días desde {base.strftime('%Y-%m-%d')}):"]
+    for i in range(7):
+        f = base + timedelta(days=i)
+        dsem = f.weekday()
+        fstr = f.strftime("%Y-%m-%d")
+        if dsem >= 5:
+            lineas.append(f"  {dias_es[dsem]} {fstr}: no atiende")
+            continue
+        cursor.execute("SELECT hora_inicio FROM agenda_medico WHERE medico_id=? AND dia_semana=? AND activo=1",
+                       (medico_id, dsem))
+        horas = sorted(r['hora_inicio'] for r in cursor.fetchall())
+        cursor.execute("SELECT hora FROM turnos WHERE medico_id=? AND fecha=? AND estado='confirmado'",
+                       (medico_id, fstr))
+        ocupadas = {r['hora'] for r in cursor.fetchall()}
+        libres = [h for h in horas if h not in ocupadas]
+        if libres:
+            lineas.append(f"  {dias_es[dsem]} {fstr}: {len(libres)} libres (ej: {', '.join(libres[:4])})")
+        else:
+            lineas.append(f"  {dias_es[dsem]} {fstr}: completo")
+    return "\n".join(lineas)
+
+
+@tool
 def sacar_turno(
     paciente_id: int,
     medico_id: int,
@@ -491,6 +538,54 @@ def ver_turnos_del_dia(fecha: str = "", medico_id: int = 0) -> str:
             f"    Medicación: {t['medicacion_actual'] or 'Ninguna'}"
         )
     return "\n".join(respuesta)
+
+
+@tool
+def ver_agenda_semana(medico_id: int, desde: str = "") -> str:
+    """
+    Muestra en UNA sola consulta los turnos confirmados de un médico para los próximos
+    7 días (una semana). Es la forma correcta de responder '¿qué turnos tengo esta semana?'
+    (en vez de consultar día por día). Si desde está vacío, arranca hoy.
+
+    Args:
+        medico_id: ID del médico
+        desde: fecha de inicio YYYY-MM-DD (vacío = hoy)
+    Returns:
+        Un renglón por día con los turnos de ese día.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT nombre, apellido FROM medicos WHERE id = ? AND activo = 1", (medico_id,))
+    medico = cursor.fetchone()
+    if not medico:
+        return f"No existe un médico con ID #{medico_id}. Usá listar_medicos."
+    try:
+        base = datetime.strptime(desde, "%Y-%m-%d") if desde else datetime.now()
+    except ValueError:
+        return "Formato de fecha inválido. Usá YYYY-MM-DD."
+
+    dias_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    lineas = [f"Agenda semanal de Dr/a. {medico['nombre']} {medico['apellido']} "
+              f"(desde {base.strftime('%Y-%m-%d')}):"]
+    total = 0
+    for i in range(7):
+        f = base + timedelta(days=i)
+        fstr = f.strftime("%Y-%m-%d")
+        cursor.execute("""
+            SELECT t.hora, t.motivo, p.nombre, p.apellido
+            FROM turnos t JOIN pacientes p ON t.paciente_id = p.id
+            WHERE t.medico_id = ? AND t.fecha = ? AND t.estado = 'confirmado'
+            ORDER BY t.hora
+        """, (medico_id, fstr))
+        turnos = cursor.fetchall()
+        dia = dias_es[f.weekday()]
+        if turnos:
+            total += len(turnos)
+            detalle = "; ".join(f"{t['hora']} {t['nombre']} {t['apellido']} ({t['motivo']})" for t in turnos)
+            lineas.append(f"  {dia} {fstr}: {detalle}")
+        else:
+            lineas.append(f"  {dia} {fstr}: sin turnos")
+    lineas.append(f"Total: {total} turno(s) en la semana.")
+    return "\n".join(lineas)
 
 
 @tool
@@ -1012,6 +1107,7 @@ tools_paciente = [
     buscar_paciente,
     listar_medicos,
     consultar_agenda,
+    disponibilidad_semana,          # Días con turnos libres en la semana (1 llamada)
     sacar_turno,
     cancelar_turno,
     mis_turnos,
@@ -1023,6 +1119,7 @@ tools_paciente = [
 
 tools_medico = [
     ver_turnos_del_dia,
+    ver_agenda_semana,              # Toda la semana en una sola llamada
     ver_solicitudes_pendientes,
     aprobar_solicitud,
     rechazar_solicitud,

@@ -64,7 +64,8 @@ async def on_chat_start():
     perfil = cl.user_session.get("chat_profile") or "Paciente"
 
     if perfil == "Paciente":
-        rol, paciente_id, medico_id = "paciente", 1, None  # demo: paciente id=1
+        # El paciente NO se asume: el agente lo identifica por DNI en la conversación.
+        rol, paciente_id, medico_id = "paciente", None, None
     else:
         rol, paciente_id, medico_id = "medico", None, None
         for m in _medicos():

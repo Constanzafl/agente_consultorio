@@ -85,24 +85,28 @@ PROMPT_PACIENTE = (
     "Para dudas sobre hábitos saludables o el manejo de enfermedades crónicas (HTA, DM2, etc.), "
     "usá la tool `consultar_guias` (busca en guías clínicas) y respondé SOLO con lo que traiga.\n\n"
     "REGLAS (guardarrailes):\n"
-    "1. Para BUSCAR información (consultar_guias, cargar_skill, ver turnos) "
+    "1. IDENTIFICÁ al paciente antes de cualquier acción que sea SOBRE él (ver sus turnos, "
+    "pedir receta, enviar consulta): pedile el DNI y buscalo con `buscar_paciente` para obtener "
+    "su ID. NUNCA asumas quién es ni inventes un paciente. Si no está registrado, ofrecé "
+    "registrarlo. (Para dudas generales de salud/hábitos no hace falta identificarlo.)\n"
+    "2. Para BUSCAR información (consultar_guias, cargar_skill, ver turnos) "
     "llamá la tool DIRECTAMENTE, sin pedir permiso ni anunciar que la vas a usar. No preguntes "
     "'¿te parece bien?': simplemente usala y respondé con el resultado.\n"
-    "2. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
-    "3. Las recetas y consultas van dirigidas a UN médico específico: preguntá a cuál "
+    "3. NO diagnostiques ni prescribas. Vos NO sos el médico.\n"
+    "4. Las recetas y consultas van dirigidas a UN médico específico: preguntá a cuál "
     "(mostralos con `listar_medicos`, o usá el médico de su último turno). SIEMPRE quedan "
     "PENDIENTES de aprobación (nunca las das por aprobadas).\n"
-    "4. Ante señales de URGENCIA (dolor de pecho, dificultad para respirar, pérdida de conocimiento, "
+    "5. Ante señales de URGENCIA (dolor de pecho, dificultad para respirar, pérdida de conocimiento, "
     "déficit neurológico, sangrado importante), NO uses tools: indicá llamar al 911 o ir a una guardia YA.\n"
-    "5. Pedí confirmación SOLO antes de acciones que MODIFICAN datos (sacar/cancelar turno, solicitar receta).\n"
-    "6. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool que escribe.\n"
-    "7. Para SACAR UN TURNO seguí el skill `ingreso_paciente` (cargalo con cargar_skill): "
+    "6. Pedí confirmación SOLO antes de acciones que MODIFICAN datos (sacar/cancelar turno, solicitar receta).\n"
+    "7. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool que escribe.\n"
+    "8. Para SACAR UN TURNO seguí el skill `ingreso_paciente` (cargalo con cargar_skill): "
     "identificar al paciente por DNI; si es nuevo, registrarlo; elegir médico (hay varios, "
     "mostralos con `listar_medicos`); ver horarios y reservar.\n"
-    "8. NO ofrezcas ni sugieras acciones que el paciente no pidió (no propongas sacar recetas "
+    "9. NO ofrezcas ni sugieras acciones que el paciente no pidió (no propongas sacar recetas "
     "ni hacer consultas: eso le genera trabajo innecesario al médico). Al terminar, cerrá con "
     "un simple '¿Necesitás algo más?' SIN dar ejemplos.\n"
-    "9. Sé cálido, claro y breve. No uses emojis."
+    "10. Sé cálido, claro y breve. No uses emojis."
 )
 
 PROMPT_MEDICO = (
@@ -193,9 +197,10 @@ def _nodo_agente(state: EstadoConsultorio, llm_con_tools, system_prompt: str) ->
     if state.get("medico_id"):
         prompt += (
             f"\n\nContexto: SOS el médico con medico_id={state['medico_id']}. "
-            "Para 'mi agenda' o 'mis turnos' usá ver_turnos_del_dia con ESE medico_id. "
-            "Para 'mis solicitudes/recetas pendientes' usá ver_solicitudes_pendientes con ESE "
-            "medico_id (así ves SOLO las tuyas). No vuelvas a preguntar qué médico sos."
+            "Para los turnos de UN día usá ver_turnos_del_dia; para 'esta semana' / varios "
+            "días usá ver_agenda_semana (UNA sola llamada, no consultes día por día). "
+            "Para 'mis solicitudes/recetas pendientes' usá ver_solicitudes_pendientes. "
+            "Pasales SIEMPRE tu medico_id. No vuelvas a preguntar qué médico sos."
         )
     mensajes = [SystemMessage(content=prompt)] + state["messages"]
     respuesta = llm_con_tools.invoke(mensajes)

@@ -9,13 +9,15 @@ Pensado para un médico de familia que atiende pacientes con enfermedades cróni
 ## Descripción
 
 El sistema conecta **dos agentes especializados** a través de un **orquestador** central,
-con un **guardarrail de urgencias** como primer filtro:
+con un **guardarrail de urgencias** como primer filtro. El centro tiene **varios médicos**:
+la agenda, los turnos y las solicitudes (recetas/consultas) son **por médico**.
 
-- **Agente Paciente**: sacar/cancelar turnos, registrarse, solicitar recetas, dudas sobre
-  hábitos saludables (respondidas con RAG sobre guías clínicas).
-- **Agente Médico**: agenda del día con info del paciente, aprobar/rechazar solicitudes
-  (human-in-the-loop), consultar medicamentos (OpenFDA) y evidencia científica (PubMed),
-  seguimiento de pacientes crónicos.
+- **Agente Paciente**: registrarse (ingreso guiado con datos filiatorios + obra social y
+  **plan**), sacar/cancelar turnos **eligiendo médico**, solicitar recetas dirigidas a un
+  médico, dudas sobre hábitos saludables (RAG sobre guías de educación al paciente).
+- **Agente Médico**: se elige **qué médico sos** al entrar; ve **su** agenda del día con la
+  info del paciente, aprueba/rechaza **sus** solicitudes (human-in-the-loop), consulta
+  medicamentos (OpenFDA), guías clínicas profesionales y evidencia (PubMed).
 
 ---
 
@@ -24,7 +26,7 @@ con un **guardarrail de urgencias** como primer filtro:
 ### El recorrido de una conversación
 
 ```
-        Usuario (UI Chainlit) — elige rol: Paciente o Médico
+   Usuario (UI Chainlit) — elige perfil: Paciente, o uno de los médicos del centro
                               │  escribe un mensaje
                               ▼
                     ┌───────────────────┐
@@ -59,7 +61,7 @@ con un **guardarrail de urgencias** como primer filtro:
 
 ```mermaid
 flowchart TD
-    U["Usuario · UI Chainlit<br/>rol: Paciente / Médico"] --> G{"Guardarrail<br/>¿urgencia?"}
+    U["Usuario · UI Chainlit<br/>perfil: Paciente / un Médico"] --> G{"Guardarrail<br/>¿urgencia?"}
     G -->|sí| E["Escala: 911 / guardia · FIN"]
     G -->|no| O["Orquestador<br/>rutea por rol"]
     O -->|paciente| AP["Agente Paciente"]
@@ -75,17 +77,17 @@ flowchart TD
 
 | Archivo | Fase | Qué hace |
 |---|---|---|
-| `agente_consultorio/db.py` | 1 | Crea las **6 tablas** SQLite, carga datos de ejemplo (idempotente) y expone la conexión `conn`. |
-| `agente_consultorio/tools.py` | 1 | Las **herramientas** (`@tool`) que el agente puede ejecutar: sacar turno, pedir receta, aprobar, buscar en PubMed/OpenFDA, memoria… Usan `conn` de `db.py`. |
+| `agente_consultorio/db.py` | 1 | Crea las **7 tablas** SQLite (pacientes, médicos, agenda, turnos, solicitudes, historial), carga datos de ejemplo (idempotente) y expone la conexión `conn`. Agenda/turnos/solicitudes son **por médico**. |
+| `agente_consultorio/tools.py` | 1 | Las **herramientas** (`@tool`): listar médicos, sacar turno (con médico), pedir receta (dirigida a un médico), aprobar, buscar en PubMed/OpenFDA, memoria… Usan `conn` de `db.py`. |
 | `agente_consultorio/llm.py` | 2 | **Factory de LLM con failover**: elige el modelo (LM Studio local → Gemini → Groq → HuggingFace). Si uno se cae o se queda sin cuota, pasa al siguiente. |
 | `agente_consultorio/grafo.py` | 2 | El **cerebro**: arma el grafo LangGraph (guardarrail → orquestador → agentes → tools), define los prompts de cada agente y la **memoria de corto plazo** (`MemorySaver`). |
-| `agente_consultorio/rag.py` | 3 | **RAG**: lee los PDF de guías, los parte en fragmentos, los indexa en ChromaDB y ofrece la tool `consultar_guias`. |
+| `agente_consultorio/rag.py` | 3 | **RAG por audiencia**: indexa en ChromaDB los PDF de `guias_pdf/paciente/` y `guias_pdf/medico/` por separado. Tools `consultar_guias` (paciente) y `consultar_guias_medico` (profesional). |
 | `agente_consultorio/guardarrailes.py` | 4 | **Guardarrail de urgencias**: detecta síntomas de alarma por palabras clave para escalar (911/guardia). |
 | `agente_consultorio/skills_loader.py` | 5 | **Skills**: carga playbooks (`skills/*.md`) on-demand con la tool `cargar_skill`. |
 | `app.py` | 7 | La **UI web** (Chainlit) que envuelve el grafo. |
 | `tests/test_evaluacion.py` | 6 | **Evaluación**: funcionales (tools) + guardarrailes + LLM-as-judge. |
 | `ver_db.py` | — | Utilidad para **ver el estado** de la base (turnos, recetas): confirma que las acciones se guardan. |
-| `skills/*.md` | 5 | Los playbooks (educación en hábitos, protocolo de receta). |
+| `skills/*.md` | 5 | Los playbooks (ingreso de paciente y turno, educación en hábitos, protocolo de receta). |
 | `data/guias_pdf/` | 3 | Los PDF de guías clínicas que alimentan el RAG. |
 | `.env` | — | Claves y configuración (no se sube al repo). |
 
@@ -96,10 +98,15 @@ Un paciente escribe *"quiero un turno para mañana"*:
 1. **Chainlit** manda el mensaje al grafo con `rol=paciente`.
 2. **Guardarrail**: no hay palabras de urgencia → sigue.
 3. **Orquestador**: como el rol es paciente → va al **Agente Paciente**.
-4. **Agente Paciente** (LLM): sabe la fecha de hoy (se la inyectamos en el prompt), calcula
-   qué día es "mañana", confirma con el paciente y llama la tool `sacar_turno`.
+4. **Agente Paciente** (LLM): carga el skill `ingreso_paciente` y sigue el flujo: identifica al
+   paciente por DNI (si es nuevo, lo registra con sus datos + plan), le muestra los **médicos**
+   disponibles (`listar_medicos`) y le pide elegir uno. Sabe la fecha de hoy (se la inyectamos),
+   calcula "mañana", confirma, y llama `sacar_turno` con el `medico_id` elegido.
 5. La **tool** escribe el turno en **SQLite** → acción real y persistente.
 6. El agente redacta la confirmación y vuelve a la UI.
+
+Del otro lado: cuando un **médico** entra, elige **qué médico es**; el agente recibe su
+`medico_id` y así ve **su** agenda y **sus** recetas pendientes (no las de los colegas).
 
 > Las conversaciones y sus resúmenes quedan en la tabla `historial_conversaciones`
 > (memoria de largo plazo), así el agente "recuerda" interacciones pasadas del paciente.
