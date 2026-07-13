@@ -61,7 +61,7 @@ aprobada/rechazada llegan a la casilla del paciente.
 ```
 
 <details>
-<summary>El mismo diagrama en Mermaid (se ve renderizado en GitHub)</summary>
+<summary></summary>
 
 ```mermaid
 flowchart TD
