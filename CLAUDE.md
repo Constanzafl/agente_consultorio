@@ -69,8 +69,10 @@ Por eso:
 - 🟡 Fase 5 (en curso):
   - ✅ Skills: carpeta `skills/*.md` (playbooks) + `skills_loader.py` (tool
     `cargar_skill` + lista inyectada en prompts). Progressive disclosure sobre LangGraph.
-  - ⬜ Subagente PubMed estilo Deep Agents (búsqueda de evidencia)
-  - ⬜ Tier 2 (Gmail recordatorios, sugerencias proactivas, PRODIABA PDF)
+  - ✅ Notificaciones por email (`integraciones.py`): `enviar_email` (Gmail + app
+    password) + tool `notificar_paciente` (avisa al mail del paciente). En tools_medico.
+  - ⬜ Subagente PubMed estilo Deep Agents (búsqueda de evidencia, opcional)
+  - ⬜ Google Calendar / WhatsApp (a futuro)
 - ✅ Fase 6: Evaluación (`tests/test_evaluacion.py`). 3 bloques: funcionales (tools),
   guardarrailes (urgencias) — deterministas — y LLM-as-judge (estilo Clase 2) que
   evalúa respuestas del agente. Correr: `python tests/test_evaluacion.py`

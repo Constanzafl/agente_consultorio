@@ -44,16 +44,19 @@ try:
     from .rag import consultar_guias, consultar_guias_medico
     from .guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
     from .skills_loader import cargar_skill, bloque_skills_para_prompt
+    from .integraciones import notificar_paciente
 except ImportError:
     from tools import tools_paciente, tools_medico
     from llm import crear_llm, proveedores_disponibles
     from rag import consultar_guias, consultar_guias_medico
     from guardarrailes import detectar_urgencia, MENSAJE_URGENCIA
     from skills_loader import cargar_skill, bloque_skills_para_prompt
+    from integraciones import notificar_paciente
 
 # Cada agente usa SU RAG de guías (paciente=educación, médico=clínicas) + skills.
 tools_paciente = tools_paciente + [consultar_guias, cargar_skill]
-tools_medico = tools_medico + [consultar_guias_medico, cargar_skill]
+# El médico puede además notificar a los pacientes por email.
+tools_medico = tools_medico + [consultar_guias_medico, cargar_skill, notificar_paciente]
 
 
 # =============================================================================

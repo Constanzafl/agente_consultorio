@@ -366,6 +366,9 @@ def mis_turnos(paciente_id: int) -> str:
         Lista de turnos futuros del paciente
     """
     cursor = conn.cursor()
+    hoy = datetime.now().strftime("%Y-%m-%d")
+
+    # Turnos CONFIRMADOS próximos
     cursor.execute("""
         SELECT t.id, t.fecha, t.hora, t.motivo, t.tipo,
                m.nombre AS med_nombre, m.apellido AS med_apellido
@@ -374,19 +377,79 @@ def mis_turnos(paciente_id: int) -> str:
         WHERE t.paciente_id = ? AND t.estado = 'confirmado'
         ORDER BY t.fecha, t.hora
     """, (paciente_id,))
+    confirmados = cursor.fetchall()
 
-    turnos = cursor.fetchall()
-    if not turnos:
-        return "No tenés turnos confirmados próximamente."
+    # Turnos CANCELADOS recientes o futuros (para avisar que se cayeron)
+    cursor.execute("""
+        SELECT t.fecha, t.hora, t.motivo, t.notas,
+               m.nombre AS med_nombre, m.apellido AS med_apellido
+        FROM turnos t
+        LEFT JOIN medicos m ON t.medico_id = m.id
+        WHERE t.paciente_id = ? AND t.estado = 'cancelado' AND t.fecha >= ?
+        ORDER BY t.fecha, t.hora
+    """, (paciente_id, hoy))
+    cancelados = cursor.fetchall()
 
-    respuesta = [f"Turnos confirmados ({len(turnos)}):"]
-    for t in turnos:
-        medico = f" con Dr/a. {t['med_nombre']} {t['med_apellido']}" if t['med_nombre'] else ""
-        respuesta.append(
-            f"  • Turno #{t['id']}: {t['fecha']} a las {t['hora']}{medico} — "
-            f"{t['motivo']} ({t['tipo']})"
-        )
-    return "\n".join(respuesta)
+    if not confirmados and not cancelados:
+        return "No tenés turnos confirmados ni cancelados próximamente."
+
+    partes = []
+    if confirmados:
+        partes.append(f"Turnos confirmados ({len(confirmados)}):")
+        for t in confirmados:
+            medico = f" con Dr/a. {t['med_nombre']} {t['med_apellido']}" if t['med_nombre'] else ""
+            partes.append(f"  • Turno #{t['id']}: {t['fecha']} a las {t['hora']}{medico} — "
+                          f"{t['motivo']} ({t['tipo']})")
+    else:
+        partes.append("No tenés turnos confirmados próximamente.")
+
+    if cancelados:
+        partes.append(f"\nAtención: tenés {len(cancelados)} turno(s) CANCELADO(S):")
+        for t in cancelados:
+            medico = f" con Dr/a. {t['med_nombre']} {t['med_apellido']}" if t['med_nombre'] else ""
+            motivo = f" — motivo: {t['notas']}" if t['notas'] else ""
+            partes.append(f"  • {t['fecha']} a las {t['hora']}{medico} ({t['motivo']}){motivo}")
+        partes.append("Si querés, puedo ayudarte a sacar un nuevo turno.")
+
+    return "\n".join(partes)
+
+
+@tool
+def mis_solicitudes(paciente_id: int) -> str:
+    """
+    Muestra al paciente el ESTADO de SUS solicitudes (recetas y consultas): si están
+    pendientes, aprobadas o rechazadas, con la nota del médico si la hay. Usar cuando
+    el paciente pregunta '¿mi receta fue aprobada?', '¿en qué quedó mi consulta?', etc.
+    Solo necesita el paciente_id (identificalo antes por DNI).
+
+    Args:
+        paciente_id: ID del paciente
+    Returns:
+        Lista de sus solicitudes con el estado de cada una.
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT s.id, s.tipo, s.estado, s.medicamento, s.respuesta_medico, s.fecha_creacion,
+               m.nombre AS med_nombre, m.apellido AS med_apellido
+        FROM solicitudes s
+        LEFT JOIN medicos m ON s.medico_id = m.id
+        WHERE s.paciente_id = ?
+        ORDER BY s.fecha_creacion DESC
+    """, (paciente_id,))
+    sols = cursor.fetchall()
+    if not sols:
+        return "No tenés solicitudes (recetas ni consultas) registradas."
+
+    partes = [f"Tus solicitudes ({len(sols)}):"]
+    for s in sols:
+        medico = f" para Dr/a. {s['med_nombre']} {s['med_apellido']}" if s['med_nombre'] else ""
+        linea = f"  • #{s['id']} {s['tipo'].upper()}{medico}: {s['estado'].upper()}"
+        if s['medicamento']:
+            linea += f" — {s['medicamento']}"
+        if s['respuesta_medico']:
+            linea += f" (nota del médico: {s['respuesta_medico']})"
+        partes.append(linea)
+    return "\n".join(partes)
 
 
 @tool
@@ -1112,6 +1175,7 @@ tools_paciente = [
     cancelar_turno,
     mis_turnos,
     solicitar_receta,
+    mis_solicitudes,                # Estado de sus recetas/consultas (¿fue aprobada?)
     enviar_consulta_medica,
     recuperar_historial_paciente,  # Memoria: leer historial al inicio
     guardar_resumen_conversacion,  # Memoria: guardar resumen al final
