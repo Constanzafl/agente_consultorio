@@ -13,17 +13,29 @@ import requests
 from datetime import datetime, timedelta
 from langchain.tools import tool
 
-# La conexión y el esquema viven en db.py
+# La conexión y el esquema viven en db.py; el envío de mails, en integraciones.py
 try:
     from .db import conn
+    from .integraciones import avisar_paciente
 except ImportError:
     from db import conn
+    from integraciones import avisar_paciente
 
 # Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
+
+
+def _avisar(paciente_id: int, asunto: str, mensaje: str) -> str:
+    """Notifica al paciente por email (best-effort). Devuelve una nota para el agente
+    solo si el mail se envió; si no está configurado o falla, no molesta."""
+    try:
+        estado = avisar_paciente(paciente_id, asunto, mensaje)
+        return "\n(Se notificó al paciente por email.)" if estado.startswith("Email enviado") else ""
+    except Exception:
+        return ""
 
 
 # =============================================================================
@@ -306,6 +318,11 @@ def sacar_turno(
     """, (paciente_id, medico_id, fecha, hora, motivo, tipo))
     conn.commit()
 
+    aviso = _avisar(
+        paciente_id, "Turno confirmado",
+        f"Tu turno quedó confirmado para el {fecha} a las {hora} con Dr/a. "
+        f"{medico['nombre']} {medico['apellido']} (motivo: {motivo})."
+    )
     return (
         f"Turno confirmado:\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
@@ -314,7 +331,7 @@ def sacar_turno(
         f"  Motivo: {motivo}\n"
         f"  Tipo: {tipo}\n"
         f"  ID del turno: #{cursor.lastrowid}"
-    )
+    ) + aviso
 
 
 @tool
@@ -330,7 +347,7 @@ def cancelar_turno(turno_id: int) -> str:
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT t.id, t.fecha, t.hora, t.estado, p.nombre, p.apellido
+        SELECT t.id, t.paciente_id, t.fecha, t.hora, t.estado, p.nombre, p.apellido
         FROM turnos t JOIN pacientes p ON t.paciente_id = p.id
         WHERE t.id = ?
     """, (turno_id,))
@@ -348,11 +365,15 @@ def cancelar_turno(turno_id: int) -> str:
     """, (turno_id,))
     conn.commit()
 
+    aviso = _avisar(
+        turno['paciente_id'], "Turno cancelado",
+        f"Tu turno del {turno['fecha']} a las {turno['hora']} fue cancelado."
+    )
     return (
         f"Turno #{turno_id} cancelado:\n"
         f"  Paciente: {turno['nombre']} {turno['apellido']}\n"
         f"  Era para: {turno['fecha']} a las {turno['hora']}"
-    )
+    ) + aviso
 
 
 @tool
@@ -736,12 +757,17 @@ def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
     """, (nota_medico, solicitud_id))
     conn.commit()
 
+    nota = f" Nota del médico: {nota_medico}." if nota_medico else ""
+    aviso = _avisar(
+        sol['paciente_id'], f"Tu {sol['tipo']} fue aprobada",
+        f"Tu solicitud de {sol['tipo']} (#{solicitud_id}) fue APROBADA.{nota}"
+    )
     return (
         f"Solicitud #{solicitud_id} APROBADA:\n"
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Nota del médico: {nota_medico or 'Sin observaciones'}"
-    )
+    ) + aviso
 
 
 @tool
@@ -758,7 +784,7 @@ def rechazar_solicitud(solicitud_id: int, motivo: str) -> str:
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT s.id, s.tipo, s.estado, p.nombre, p.apellido
+        SELECT s.id, s.tipo, s.estado, s.paciente_id, p.nombre, p.apellido
         FROM solicitudes s JOIN pacientes p ON s.paciente_id = p.id
         WHERE s.id = ?
     """, (solicitud_id,))
@@ -778,12 +804,16 @@ def rechazar_solicitud(solicitud_id: int, motivo: str) -> str:
     """, (motivo, solicitud_id))
     conn.commit()
 
+    aviso = _avisar(
+        sol['paciente_id'], f"Tu {sol['tipo']} fue rechazada",
+        f"Tu solicitud de {sol['tipo']} (#{solicitud_id}) fue RECHAZADA. Motivo: {motivo}."
+    )
     return (
         f"Solicitud #{solicitud_id} RECHAZADA:\n"
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Motivo: {motivo}"
-    )
+    ) + aviso
 
 
 @tool
@@ -804,7 +834,7 @@ def cancelar_dia_completo(fecha: str, motivo: str) -> str:
 
     # Buscar turnos confirmados de ese día
     cursor.execute("""
-        SELECT t.id, t.hora, t.motivo,
+        SELECT t.id, t.paciente_id, t.hora, t.motivo,
                p.nombre, p.apellido, p.telefono, p.email
         FROM turnos t
         JOIN pacientes p ON t.paciente_id = p.id
@@ -824,10 +854,11 @@ def cancelar_dia_completo(fecha: str, motivo: str) -> str:
     """, (f"Cancelado por médico: {motivo}", fecha))
     conn.commit()
 
+    notificados = 0
     respuesta = [
         f"Se cancelaron {len(turnos)} turnos del {fecha}.\n"
         f"  Motivo: {motivo}\n"
-        f"\n  Pacientes a notificar:"
+        f"\n  Pacientes afectados:"
     ]
     for t in turnos:
         respuesta.append(
@@ -835,7 +866,12 @@ def cancelar_dia_completo(fecha: str, motivo: str) -> str:
             f"      Tel: {t['telefono']} | Email: {t['email']}\n"
             f"      Turno #{t['id']} (era: {t['motivo']})"
         )
+        if _avisar(t['paciente_id'], "Turno cancelado",
+                   f"Tu turno del {fecha} a las {t['hora']} fue cancelado. Motivo: {motivo}."):
+            notificados += 1
 
+    if notificados:
+        respuesta.append(f"\nSe notificaron {notificados} paciente(s) por email.")
     return "\n".join(respuesta)
 
 

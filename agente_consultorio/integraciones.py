@@ -10,8 +10,7 @@ CONTRASEÑA DE APLICACIÓN (no la clave real). Configurar en .env:
     GMAIL_USER=tu_casilla@gmail.com
     GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx   (16 caracteres de Google)
 
-Los mails LLEGAN a la casilla del destinatario (ej: el email del paciente
-guardado en su ficha). No usa ninguna "línea"/teléfono, solo la casilla.
+AUTO TEST
 =============================================================================
 """
 
@@ -49,7 +48,8 @@ def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
 
     try:
         contexto = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=contexto) as servidor:
+        # timeout=15: si el servidor no responde, corta (no cuelga el agente).
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=contexto, timeout=15) as servidor:
             servidor.login(remitente, password)
             servidor.send_message(msg)
         return f"Email enviado a {destinatario}."
@@ -57,12 +57,26 @@ def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
         return f"Error al enviar el email: {e}"
 
 
+def avisar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
+    """Envía un email al paciente (a la casilla de su ficha). Función plana, reutilizable
+    tanto por la tool como por las acciones automáticas (sacar/cancelar turno, aprobar receta).
+    Devuelve un estado; nunca lanza excepción."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT nombre, apellido, email FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
+    p = cursor.fetchone()
+    if not p:
+        return f"No se encontró un paciente activo con ID #{paciente_id}."
+    if not p["email"]:
+        return f"El paciente {p['nombre']} {p['apellido']} no tiene email registrado."
+    cuerpo = f"Hola {p['nombre']},\n\n{mensaje}\n\n— Consultorio de Medicina Familiar"
+    return enviar_email(p["email"], asunto, cuerpo)
+
+
 @tool
 def notificar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
     """
     Envía un email al paciente, a la casilla que tiene registrada en su ficha.
-    Útil para avisos: recordatorio de turno, cancelación, receta aprobada/rechazada.
-    Confirmá el contenido con quien lo pide ANTES de enviarlo.
+    Útil para avisos manuales. Confirmá el contenido antes de enviarlo.
 
     Args:
         paciente_id: ID del paciente a notificar
@@ -71,16 +85,7 @@ def notificar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
     Returns:
         Estado del envío.
     """
-    cursor = conn.cursor()
-    cursor.execute("SELECT nombre, apellido, email FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
-    p = cursor.fetchone()
-    if not p:
-        return f"No se encontró un paciente activo con ID #{paciente_id}."
-    if not p["email"]:
-        return f"El paciente {p['nombre']} {p['apellido']} no tiene email registrado."
-
-    cuerpo = f"Hola {p['nombre']},\n\n{mensaje}\n\n— Consultorio de Medicina Familiar"
-    return enviar_email(p["email"], asunto, cuerpo)
+    return avisar_paciente(paciente_id, asunto, mensaje)
 
 
 if __name__ == "__main__":

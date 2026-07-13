@@ -5,7 +5,9 @@ descripcion: Flujo para sacar un turno, distinguiendo si el paciente ya existe o
 Cuando el paciente quiere sacar un turno, o dice que es su primera vez en el centro.
 
 ## Cómo actuar (en orden)
-1. **Identificá al paciente**: pedí el DNI y buscalo con `buscar_paciente`.
+1. **Identificá al paciente** (SOLO si todavía no lo hiciste): pedí el DNI y buscalo con
+   `buscar_paciente`. Si en esta conversación YA lo identificaste (ya tenés su ID), NO lo
+   busques otra vez: pasá directo al paso 3.
 2. **Si NO está registrado (primera vez)**:
    - Avisá que primero hay que registrarlo y pedí los datos filiatorios: nombre, apellido,
      DNI, fecha de nacimiento (YYYY-MM-DD), teléfono, email, obra social, **PLAN** y número

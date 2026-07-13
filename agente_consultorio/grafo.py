@@ -91,7 +91,9 @@ PROMPT_PACIENTE = (
     "1. IDENTIFICÁ al paciente antes de cualquier acción que sea SOBRE él (ver sus turnos, "
     "pedir receta, enviar consulta): pedile el DNI y buscalo con `buscar_paciente` para obtener "
     "su ID. NUNCA asumas quién es ni inventes un paciente. Si no está registrado, ofrecé "
-    "registrarlo. (Para dudas generales de salud/hábitos no hace falta identificarlo.)\n"
+    "registrarlo. UNA VEZ que ya lo identificaste (ya tenés su ID de una búsqueda), NO lo "
+    "vuelvas a buscar: seguí directamente con lo que pidió. (Para dudas generales de salud "
+    "o hábitos no hace falta identificarlo.)\n"
     "2. Para BUSCAR información (consultar_guias, cargar_skill, ver turnos) "
     "llamá la tool DIRECTAMENTE, sin pedir permiso ni anunciar que la vas a usar. No preguntes "
     "'¿te parece bien?': simplemente usala y respondé con el resultado.\n"
@@ -103,9 +105,14 @@ PROMPT_PACIENTE = (
     "déficit neurológico, sangrado importante), NO uses tools: indicá llamar al 911 o ir a una guardia YA.\n"
     "6. Pedí confirmación SOLO antes de acciones que MODIFICAN datos (sacar/cancelar turno, solicitar receta).\n"
     "7. Validá los datos (fechas YYYY-MM-DD, horas HH:MM) antes de llamar una tool que escribe.\n"
-    "8. Para SACAR UN TURNO seguí el skill `ingreso_paciente` (cargalo con cargar_skill): "
-    "identificar al paciente por DNI; si es nuevo, registrarlo; elegir médico (hay varios, "
-    "mostralos con `listar_medicos`); ver horarios y reservar.\n"
+    "8. Para SACAR UN TURNO, seguí estos pasos EN ORDEN, uno por vez:\n"
+    "   a) Pedí el DNI y buscá al paciente con `buscar_paciente`.\n"
+    "   b) Si NO existe: registralo con `registrar_paciente` (pedí sus datos).\n"
+    "   c) Si SÍ existe (ya lo encontraste): saludalo por su nombre y SEGUÍ, sin volver a buscarlo.\n"
+    "   d) Preguntá el MOTIVO de la consulta.\n"
+    "   e) Mostrá los médicos con `listar_medicos` y pedile que elija uno.\n"
+    "   f) Mostrá los horarios con `consultar_agenda` y que elija fecha y hora.\n"
+    "   g) Confirmá todo y reservá con `sacar_turno`.\n"
     "9. NO ofrezcas ni sugieras acciones que el paciente no pidió (no propongas sacar recetas "
     "ni hacer consultas: eso le genera trabajo innecesario al médico). Al terminar, cerrá con "
     "un simple '¿Necesitás algo más?' SIN dar ejemplos.\n"
@@ -277,6 +284,26 @@ def construir_grafo(checkpointer=None):
 # 5. HELPER DE CHAT (para testear rápido en consola)
 # =============================================================================
 
+def _extraer_texto(msg) -> str:
+    """Saca el texto de un mensaje del LLM, tolerando content vacío o en formato de
+    lista de bloques (algunos modelos de 'razonamiento' devuelven listas o vacío)."""
+    contenido = getattr(msg, "content", "")
+    if isinstance(contenido, list):
+        partes = []
+        for b in contenido:
+            if isinstance(b, dict):
+                partes.append(b.get("text") or b.get("content") or "")
+            else:
+                partes.append(str(b))
+        contenido = "".join(partes)
+    contenido = (contenido or "").strip()
+    if not contenido:
+        return ("(El modelo no devolvió una respuesta legible. Probá reformular la "
+                "pregunta. Si pasa seguido, cambiá el modelo en LM Studio por uno "
+                "'Instruct' sin modo de razonamiento.)")
+    return contenido
+
+
 def chatear(app, texto: str, thread_id: str = "demo",
             rol: str = "", paciente_id: Optional[int] = None,
             medico_id: Optional[int] = None) -> str:
@@ -290,7 +317,7 @@ def chatear(app, texto: str, thread_id: str = "demo",
         entrada["medico_id"] = medico_id
     config = {"configurable": {"thread_id": thread_id}}
     resultado = app.invoke(entrada, config)
-    return resultado["messages"][-1].content
+    return _extraer_texto(resultado["messages"][-1])
 
 
 # =============================================================================

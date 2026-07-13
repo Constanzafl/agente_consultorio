@@ -19,6 +19,10 @@ la agenda, los turnos y las solicitudes (recetas/consultas) son **por médico**.
   info del paciente, aprueba/rechaza **sus** solicitudes (human-in-the-loop), consulta
   medicamentos (OpenFDA), guías clínicas profesionales y evidencia (PubMed).
 
+Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema envía
+**notificaciones por email automáticas**: turno confirmado, turno cancelado y receta
+aprobada/rechazada llegan a la casilla del paciente.
+
 ---
 
 ## Cómo funciona (arquitectura)
@@ -70,6 +74,7 @@ flowchart TD
     AM --> T
     T --> DB[("SQLite<br/>memoria largo plazo")]
     T --> API["PubMed / OpenFDA"]
+    T --> MAIL["Email (avisos automáticos)"]
 ```
 </details>
 
@@ -78,12 +83,13 @@ flowchart TD
 | Archivo | Fase | Qué hace |
 |---|---|---|
 | `agente_consultorio/db.py` | 1 | Crea las **7 tablas** SQLite (pacientes, médicos, agenda, turnos, solicitudes, historial), carga datos de ejemplo (idempotente) y expone la conexión `conn`. Agenda/turnos/solicitudes son **por médico**. |
-| `agente_consultorio/tools.py` | 1 | Las **herramientas** (`@tool`): listar médicos, sacar turno (con médico), pedir receta (dirigida a un médico), aprobar, buscar en PubMed/OpenFDA, memoria… Usan `conn` de `db.py`. |
+| `agente_consultorio/tools.py` | 1 | Las **herramientas** (`@tool`): listar médicos, sacar/ver turnos (por día o por semana), estado de recetas, pedir/aprobar recetas por médico, PubMed/OpenFDA, memoria… Usan `conn` de `db.py`. |
 | `agente_consultorio/llm.py` | 2 | **Factory de LLM con failover**: elige el modelo (LM Studio local → Gemini → Groq → HuggingFace). Si uno se cae o se queda sin cuota, pasa al siguiente. |
 | `agente_consultorio/grafo.py` | 2 | El **cerebro**: arma el grafo LangGraph (guardarrail → orquestador → agentes → tools), define los prompts de cada agente y la **memoria de corto plazo** (`MemorySaver`). |
 | `agente_consultorio/rag.py` | 3 | **RAG por audiencia**: indexa en ChromaDB los PDF de `guias_pdf/paciente/` y `guias_pdf/medico/` por separado. Tools `consultar_guias` (paciente) y `consultar_guias_medico` (profesional). |
 | `agente_consultorio/guardarrailes.py` | 4 | **Guardarrail de urgencias**: detecta síntomas de alarma por palabras clave para escalar (911/guardia). |
 | `agente_consultorio/skills_loader.py` | 5 | **Skills**: carga playbooks (`skills/*.md`) on-demand con la tool `cargar_skill`. |
+| `agente_consultorio/integraciones.py` | 5 | **Notificaciones por email** (Gmail + app password): `enviar_email`, y avisos automáticos al paciente (turno confirmado/cancelado, receta aprobada/rechazada). |
 | `app.py` | 7 | La **UI web** (Chainlit) que envuelve el grafo. |
 | `tests/test_evaluacion.py` | 6 | **Evaluación**: funcionales (tools) + guardarrailes + LLM-as-judge. |
 | `ver_db.py` | — | Utilidad para **ver el estado** de la base (turnos, recetas): confirma que las acciones se guardan. |
@@ -98,15 +104,17 @@ Un paciente escribe *"quiero un turno para mañana"*:
 1. **Chainlit** manda el mensaje al grafo con `rol=paciente`.
 2. **Guardarrail**: no hay palabras de urgencia → sigue.
 3. **Orquestador**: como el rol es paciente → va al **Agente Paciente**.
-4. **Agente Paciente** (LLM): carga el skill `ingreso_paciente` y sigue el flujo: identifica al
-   paciente por DNI (si es nuevo, lo registra con sus datos + plan), le muestra los **médicos**
-   disponibles (`listar_medicos`) y le pide elegir uno. Sabe la fecha de hoy (se la inyectamos),
-   calcula "mañana", confirma, y llama `sacar_turno` con el `medico_id` elegido.
-5. La **tool** escribe el turno en **SQLite** → acción real y persistente.
+4. **Agente Paciente** (LLM): lo **identifica por DNI** con `buscar_paciente`. Si NO existe, lo
+   registra (datos + plan); si YA existe, lo saluda y sigue. Le muestra los **médicos**
+   (`listar_medicos`) y le pide elegir. Sabe la fecha de hoy (se la inyectamos), calcula
+   "mañana", confirma, y llama `sacar_turno` con el `medico_id` elegido.
+5. La **tool** escribe el turno en **SQLite** (acción real) y **manda un email automático**
+   de confirmación al paciente.
 6. El agente redacta la confirmación y vuelve a la UI.
 
 Del otro lado: cuando un **médico** entra, elige **qué médico es**; el agente recibe su
 `medico_id` y así ve **su** agenda y **sus** recetas pendientes (no las de los colegas).
+Al aprobar/cancelar, al paciente le llega el aviso por email.
 
 > Las conversaciones y sus resúmenes quedan en la tabla `historial_conversaciones`
 > (memoria de largo plazo), así el agente "recuerda" interacciones pasadas del paciente.
@@ -123,6 +131,7 @@ Del otro lado: cuando un **médico** entra, elige **qué médico es**; el agente
 | Vector store | ChromaDB |
 | Base de datos | SQLite |
 | APIs externas | PubMed (evidencia) · OpenFDA (medicamentos) — gratis |
+| Notificaciones | Email (Gmail SMTP + contraseña de aplicación) |
 | Observabilidad | LangSmith (tracing) |
 | UI | Chainlit |
 
@@ -139,7 +148,8 @@ agente-consultorio/
 │   ├── grafo.py              # Fase 2: grafo LangGraph multi-agente
 │   ├── rag.py                # Fase 3: RAG de guías clínicas
 │   ├── guardarrailes.py      # Fase 4: guardarrail de urgencias
-│   └── skills_loader.py      # Fase 5: skills (playbooks)
+│   ├── skills_loader.py      # Fase 5: skills (playbooks)
+│   └── integraciones.py      # Fase 5: notificaciones por email
 ├── skills/                   # Fase 5: playbooks .md
 ├── data/guias_pdf/
 │   ├── paciente/             # Fase 3: guías de educación al paciente (RAG paciente)
