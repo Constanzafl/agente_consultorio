@@ -2,19 +2,17 @@
 =============================================================================
 AGENTE CONSULTORIO MÉDICO — Factory de LLM con FAILOVER de proveedores
 =============================================================================
-Proveedor PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado y sin cuota.
-Los proveedores cloud quedan como failover OPCIONAL usando `.with_fallbacks()`
-de LangChain: si LM Studio no está levantado (o falla), y hay claves cloud
-cargadas, el grafo usa la siguiente sin cambiar una línea.
+Proveedor PRIMARIO: LM Studio local (modelo Instruct con tool-calling),
+ilimitado y sin cuota. Groq queda como failover cloud usando `.with_fallbacks()`
+de LangChain: si LM Studio no está levantado (o falla), y hay clave de Groq
+cargada, el grafo usa Groq sin cambiar una línea.
 
-Orden por defecto:  lmstudio -> gemini -> groq -> huggingface
-  - lmstudio    : modelo LOCAL sin límite de cuota (PRIMARIO)
-  - gemini      : free tier (fallback, cuota baja)
-  - groq        : free tier, muy rápido (fallback)
-  - huggingface : inference API gratis (fallback, tool-calling best-effort)
+Orden por defecto:  lmstudio -> groq
+  - lmstudio : modelo LOCAL sin límite de cuota (PRIMARIO, ideal para tools)
+  - groq     : free tier, muy rápido (fallback cloud)
 
-Se incluye un proveedor SOLO si su clave/config está presente (LM Studio: si el
-server local está escuchando). Con tener uno solo alcanza para arrancar.
+Se incluye un proveedor SOLO si su config está lista (LM Studio: si el server
+local está escuchando; Groq: si hay GROQ_API_KEY). Con uno solo alcanza.
 
 Uso:
     from llm import crear_llm
@@ -45,14 +43,12 @@ def _config_langsmith():
 _config_langsmith()
 
 # Orden de failover configurable por env (LM Studio local como primario)
-ORDEN_DEFAULT = ["lmstudio","groq"]  ###,  "gemini"]
+ORDEN_DEFAULT = ["lmstudio", "groq"]
 
 # Modelos por defecto (se pueden pisar por env). Para lmstudio "" = auto-detectar
 # el modelo que esté cargado en el server.
 MODELOS_DEFAULT = {
-    "gemini": "gemini-2.0-flash",
     "groq": "llama-3.3-70b-versatile",
-    "huggingface": "meta-llama/Llama-3.3-70B-Instruct",
     "lmstudio": "",  # vacío => se detecta el modelo cargado en LM Studio
 }
 
@@ -92,15 +88,6 @@ def _lmstudio_modelo(base_url: str) -> str:
 
 # --- Constructores por proveedor (importan perezoso para no exigir todas las libs) ---
 
-def _build_gemini(temperature: float):
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(
-        model=os.getenv("GEMINI_MODEL", MODELOS_DEFAULT["gemini"]),
-        google_api_key=os.getenv("GEMINI_API_KEY"),
-        temperature=temperature,
-    )
-
-
 def _build_groq(temperature: float):
     from langchain_groq import ChatGroq
     return ChatGroq(
@@ -108,17 +95,6 @@ def _build_groq(temperature: float):
         api_key=os.getenv("GROQ_API_KEY"),
         temperature=temperature,
     )
-
-
-def _build_huggingface(temperature: float):
-    from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-    endpoint = HuggingFaceEndpoint(
-        repo_id=os.getenv("HUGGINGFACE_MODEL", MODELOS_DEFAULT["huggingface"]),
-        huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-        task="text-generation",
-        temperature=max(temperature, 0.01),  # HF no acepta 0 exacto
-    )
-    return ChatHuggingFace(llm=endpoint)
 
 
 def _build_lmstudio(temperature: float):
@@ -133,21 +109,15 @@ def _build_lmstudio(temperature: float):
 
 
 _BUILDERS = {
-    "gemini": _build_gemini,
     "groq": _build_groq,
-    "huggingface": _build_huggingface,
     "lmstudio": _build_lmstudio,
 }
 
 
 def _disponible(proveedor: str) -> bool:
     """True si el proveedor tiene su config lista para usarse."""
-    if proveedor == "gemini":
-        return _seteada(os.getenv("GEMINI_API_KEY"))
     if proveedor == "groq":
         return _seteada(os.getenv("GROQ_API_KEY"))
-    if proveedor == "huggingface":
-        return _seteada(os.getenv("HUGGINGFACEHUB_API_TOKEN"))
     if proveedor == "lmstudio":
         return _lmstudio_activo(os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"))
     return False
@@ -162,8 +132,8 @@ def proveedores_disponibles() -> list[str]:
 
 def crear_llm(tools: list | None = None, temperature: float = 0.0):
     """
-    Devuelve un LLM (Runnable) con failover entre todos los proveedores
-    configurados. Si se pasan `tools`, quedan ligadas a cada proveedor.
+    Devuelve un LLM (Runnable) con failover entre los proveedores configurados.
+    Si se pasan `tools`, quedan ligadas a cada proveedor.
 
     Args:
         tools: lista de tools LangChain a ligar (opcional).
@@ -178,8 +148,8 @@ def crear_llm(tools: list | None = None, temperature: float = 0.0):
     if not activos:
         raise RuntimeError(
             "No hay ningún proveedor de LLM disponible. Levantá LM Studio "
-            "(Developer -> Start Server, con gemma-4-e4b cargado) o, como "
-            "alternativa, cargá una clave cloud en .env (GEMINI/GROQ/HUGGINGFACE)."
+            "(Developer -> Start Server, con un modelo Instruct cargado) o "
+            "cargá GROQ_API_KEY en .env."
         )
 
     modelos = []

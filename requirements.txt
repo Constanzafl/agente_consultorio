@@ -7,11 +7,10 @@ langchain>=0.3.0
 langchain-core>=0.3.0
 langgraph>=0.2.0
 
-# --- Proveedores de LLM (failover: Gemini -> Groq -> HuggingFace -> LM Studio) ---
-langchain-google-genai>=2.0.0    # Gemini (primario)
-langchain-groq>=0.2.0            # Groq (alternativa gratis y rápida)
-langchain-openai>=0.2.0         # LM Studio (servidor local OpenAI-compatible)
-langchain-huggingface>=0.1.0    # HuggingFace (inference API + embeddings RAG)
+# --- Proveedores de LLM (failover: LM Studio local -> Groq) ---
+langchain-openai>=0.2.0         # LM Studio (servidor local OpenAI-compatible, PRIMARIO)
+langchain-groq>=0.2.0           # Groq (fallback cloud, gratis y rápido)
+langchain-huggingface>=0.1.0    # Embeddings del RAG (NO se usa como LLM)
 
 # --- RAG: guías clínicas PDF (Fase 3). Ojo: sentence-transformers trae torch (~2 GB) ---
 langchain-chroma>=0.2.0
