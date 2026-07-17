@@ -45,7 +45,7 @@ def _config_langsmith():
 _config_langsmith()
 
 # Orden de failover configurable por env (LM Studio local como primario)
-ORDEN_DEFAULT = ["lmstudio", "gemini", "groq", "huggingface"]
+ORDEN_DEFAULT = ["lmstudio","groq"]  ###,  "gemini"]
 
 # Modelos por defecto (se pueden pisar por env). Para lmstudio "" = auto-detectar
 # el modelo que esté cargado en el server.

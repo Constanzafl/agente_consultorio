@@ -123,7 +123,15 @@ def _buscar(audiencia: str, consulta: str) -> str:
         return (f"No hay guías de tipo '{audiencia}' cargadas todavía. "
                 f"Poné PDFs en data/guias_pdf/{audiencia}/ y reconstruí (python agente_consultorio/rag.py).")
 
-    docs = get_vectorstore(audiencia).similarity_search(consulta, k=3)
+    # MMR (Maximal Marginal Relevance): en vez de traer los k más parecidos
+    # (que suelen ser casi idénticos y del mismo PDF), busca fetch_k candidatos y
+    # elige k que sean relevantes PERO diversos entre sí. Así no copa un solo PDF
+    # y aparecen las guías específicas del tema (ej: la de HTA para "dieta y presión").
+    vs = get_vectorstore(audiencia)
+    try:
+        docs = vs.max_marginal_relevance_search(consulta, k=4, fetch_k=15, lambda_mult=0.5)
+    except Exception:
+        docs = vs.similarity_search(consulta, k=4)  # fallback si el backend no soporta MMR
     if not docs:
         return "No encontré nada relevante en las guías para esa consulta."
 

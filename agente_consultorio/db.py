@@ -103,8 +103,6 @@ def crear_base_de_datos(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
         )
     """)
 
-    # NOTA: la info de medicamentos NO se guarda en la DB. Se consulta en vivo con
-    # la tool buscar_medicamento (OpenFDA). Así no hay vademecum que mantener a mano.
 
     # --- RECETAS / SOLICITUDES ---
     cursor.execute("""
@@ -161,7 +159,7 @@ def cargar_datos_ejemplo(conn: sqlite3.Connection):
     if cursor.fetchone()[0] > 0:
         return
 
-    # --- Pacientes (con PLAN además de obra social) ---
+    # --- Pacientes  ---
     pacientes = [
         ("María", "González", "30123456", "1975-03-15", "+5491155551234",
          "maria.gonzalez@email.com", "OSDE", "210", "12345678",

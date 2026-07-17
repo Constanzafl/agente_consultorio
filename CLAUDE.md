@@ -73,9 +73,11 @@ Por eso:
     password) + tool `notificar_paciente` (avisa al mail del paciente). En tools_medico.
   - ⬜ Subagente PubMed estilo Deep Agents (búsqueda de evidencia, opcional)
   - ⬜ Google Calendar / WhatsApp (a futuro)
-- ✅ Fase 6: Evaluación (`tests/test_evaluacion.py`). 3 bloques: funcionales (tools),
-  guardarrailes (urgencias) — deterministas — y LLM-as-judge (estilo Clase 2) que
-  evalúa respuestas del agente. Correr: `python tests/test_evaluacion.py`
+- ✅ Fase 6: Evaluación (`tests/test_evaluacion.py`). 4 bloques: funcionales (tools),
+  guardarrailes (urgencias) — deterministas —, RAG (relevancia de lo recuperado) y
+  AGENTE (correctitud + relevancia end-to-end). Juez LLM con salida estructurada
+  (Pydantic, estilo Clase 2) + fallback a texto. Reporte por categoría.
+  Correr: `python tests/test_evaluacion.py`
 - 🟡 Fase 7: UI Chainlit (`app.py`) lista — chat web con perfiles Paciente/Médico
   que envuelve el grafo. Correr: `chainlit run app.py`. Falta: grabar el video.
 
