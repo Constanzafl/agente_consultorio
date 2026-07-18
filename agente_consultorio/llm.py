@@ -43,12 +43,13 @@ def _config_langsmith():
 _config_langsmith()
 
 # Orden de failover configurable por env (LM Studio local como primario)
-ORDEN_DEFAULT = ["lmstudio", "groq"]
+ORDEN_DEFAULT = ["anthropic", "lmstudio", "groq"]
 
 # Modelos por defecto (se pueden pisar por env). Para lmstudio "" = auto-detectar
 # el modelo que esté cargado en el server.
 MODELOS_DEFAULT = {
     "groq": "llama-3.3-70b-versatile",
+    "anthropic": "claude-haiku-4-5",  # barato y muy bueno con tools (subí a sonnet si hace falta)
     "lmstudio": "",  # vacío => se detecta el modelo cargado en LM Studio
 }
 
@@ -97,6 +98,15 @@ def _build_groq(temperature: float):
     )
 
 
+def _build_anthropic(temperature: float):
+    from langchain_anthropic import ChatAnthropic
+    return ChatAnthropic(
+        model=os.getenv("ANTHROPIC_MODEL", MODELOS_DEFAULT["anthropic"]),
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        temperature=temperature,
+    )
+
+
 def _build_lmstudio(temperature: float):
     from langchain_openai import ChatOpenAI
     base_url = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
@@ -110,6 +120,7 @@ def _build_lmstudio(temperature: float):
 
 _BUILDERS = {
     "groq": _build_groq,
+    "anthropic": _build_anthropic,
     "lmstudio": _build_lmstudio,
 }
 
@@ -118,6 +129,8 @@ def _disponible(proveedor: str) -> bool:
     """True si el proveedor tiene su config lista para usarse."""
     if proveedor == "groq":
         return _seteada(os.getenv("GROQ_API_KEY"))
+    if proveedor == "anthropic":
+        return _seteada(os.getenv("ANTHROPIC_API_KEY"))
     if proveedor == "lmstudio":
         return _lmstudio_activo(os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"))
     return False
