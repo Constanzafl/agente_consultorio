@@ -156,7 +156,11 @@ PROMPT_MEDICO = (
 # =============================================================================
 
 def _guardarrail_entrada(state: EstadoConsultorio) -> dict:
-    """PRIMER filtro: si el mensaje describe una urgencia, escala y corta el flujo."""
+    """PRIMER filtro, SOLO para pacientes: si el mensaje describe una urgencia, escala y corta.
+    Para el MÉDICO no aplica: puede hablar de síntomas en términos clínicos (o buscar 'chest pain'
+    en PubMed) sin que se dispare la escalada al 911."""
+    if state.get("rol") == "medico":
+        return {"urgencia": False}
     ultimo_humano = next(
         (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
         "",

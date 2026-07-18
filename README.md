@@ -38,11 +38,12 @@ Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema e
    Usuario (UI Chainlit) — elige perfil: Paciente, o uno de los médicos del centro
                               │  escribe un mensaje
                               ▼
-                    ┌───────────────────┐
-                    │   GUARDARRAIL     │ ── ¿es una urgencia? ──► SÍ: "Llamá al 911 /
-                    │  (palabras clave) │                              andá a la guardia" (FIN)
-                    └─────────┬─────────┘
-                              │ no
+                    ┌────────────────────────┐
+                    │  GUARDARRAIL           │ ── ¿es una urgencia? ──► SÍ: "Llamá al 911 /
+                    │  (urgencias, solo       │                             andá a la guardia" (FIN)
+                    │   para el paciente)    │
+                    └─────────┬──────────────┘
+                              │ no (o es médico → pasa directo)
                               ▼
                     ┌───────────────────┐
                     │   ORQUESTADOR     │  rutea según el rol
@@ -70,9 +71,9 @@ Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema e
 
 ```mermaid
 flowchart TD
-    U["Usuario · UI Chainlit<br/>perfil: Paciente / un Médico"] --> G{"Guardarrail<br/>¿urgencia?"}
-    G -->|sí| E["Escala: 911 / guardia · FIN"]
-    G -->|no| O["Orquestador<br/>rutea por rol"]
+    U["Usuario · UI Chainlit<br/>perfil: Paciente / un Médico"] --> G{"Guardarrail urgencias<br/>(solo paciente)"}
+    G -->|paciente + urgencia| E["Escala: 911 / guardia · FIN"]
+    G -->|no urgencia / es médico| O["Orquestador<br/>rutea por rol"]
     O -->|paciente| AP["Agente Paciente"]
     O -->|médico| AM["Agente Médico"]
     AP --> T["Tools · RAG guías · Skills"]

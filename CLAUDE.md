@@ -64,8 +64,10 @@ Por eso:
   Reindexar: `python agente_consultorio/rag.py`
 - ✅ Fase 4: Guardarrailes (`guardarrailes.py`). Detector de URGENCIAS por palabras
   clave, integrado como primer nodo del grafo (`guardarrail`): si detecta urgencia,
-  escala (911/guardia) y corta el flujo sin llamar a los agentes. Resto de
-  guardarrailes (no diagnosticar, confirmar, validar) en prompts y tools.
+  escala (911/guardia) y corta el flujo sin llamar a los agentes. SOLO aplica al
+  PACIENTE (si el rol es `medico`, pasa directo: puede hablar de síntomas en términos
+  clínicos sin que se dispare la escalada). Resto de guardarrailes (no diagnosticar,
+  confirmar, validar) en prompts y tools.
 - 🟡 Fase 5 (en curso):
   - ✅ Skills: carpeta `skills/*.md` (playbooks) + `skills_loader.py` (tool
     `cargar_skill` + lista inyectada en prompts). Progressive disclosure sobre LangGraph.
