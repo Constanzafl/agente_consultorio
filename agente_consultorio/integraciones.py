@@ -72,6 +72,17 @@ def avisar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
     return enviar_email(p["email"], asunto, cuerpo)
 
 
+def avisar_consultorio(asunto: str, mensaje: str) -> str:
+    """Envía un email a la casilla del CONSULTORIO (GMAIL_USER), que actúa como
+    bandeja de avisos internos: entra una consulta o receta nueva y el consultorio
+    se entera sin tener que abrir el chat. Función plana; nunca lanza excepción."""
+    consultorio = os.getenv("GMAIL_USER", "").strip()
+    if not consultorio:
+        return "Email del consultorio no configurado (falta GMAIL_USER en .env)."
+    cuerpo = f"{mensaje}\n\n— Aviso automático del sistema del consultorio"
+    return enviar_email(consultorio, asunto, cuerpo)
+
+
 @tool
 def notificar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
     """

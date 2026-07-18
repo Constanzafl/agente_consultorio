@@ -16,10 +16,10 @@ from langchain.tools import tool
 # La conexión y el esquema viven en db.py; el envío de mails, en integraciones.py
 try:
     from .db import conn
-    from .integraciones import avisar_paciente
+    from .integraciones import avisar_paciente, avisar_consultorio
 except ImportError:
     from db import conn
-    from integraciones import avisar_paciente
+    from integraciones import avisar_paciente, avisar_consultorio
 
 # Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
 try:
@@ -34,6 +34,16 @@ def _avisar(paciente_id: int, asunto: str, mensaje: str) -> str:
     try:
         estado = avisar_paciente(paciente_id, asunto, mensaje)
         return "\n(Se notificó al paciente por email.)" if estado.startswith("Email enviado") else ""
+    except Exception:
+        return ""
+
+
+def _avisar_consultorio(asunto: str, mensaje: str) -> str:
+    """Avisa a la casilla del consultorio (best-effort) que entró una solicitud nueva.
+    Devuelve una nota para el agente solo si el mail se envió; si falla, no molesta."""
+    try:
+        estado = avisar_consultorio(asunto, mensaje)
+        return "\n(Se avisó al consultorio por email.)" if estado.startswith("Email enviado") else ""
     except Exception:
         return ""
 
@@ -514,16 +524,25 @@ def solicitar_receta(
         VALUES (?, ?, 'receta', ?, ?, ?, ?)
     """, (paciente_id, medico_id, descripcion, medicamento, dosis, cantidad))
     conn.commit()
+    solicitud_id = cursor.lastrowid
 
+    # Aviso al consultorio: entró una receta nueva para revisar.
+    aviso = _avisar_consultorio(
+        "Nueva receta pendiente",
+        f"Entró una solicitud de RECETA (#{solicitud_id}) de "
+        f"{paciente['nombre']} {paciente['apellido']} para Dr/a. "
+        f"{medico['nombre']} {medico['apellido']}.\n"
+        f"Medicamento: {medicamento} | Dosis: {dosis} | Cantidad: {cantidad}"
+    )
     return (
-        f"Solicitud de receta creada (ID #{cursor.lastrowid}):\n"
+        f"Solicitud de receta creada (ID #{solicitud_id}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Dirigida a: Dr/a. {medico['nombre']} {medico['apellido']}\n"
         f"  Medicamento: {medicamento}\n"
         f"  Dosis: {dosis}\n"
         f"  Cantidad: {cantidad}\n"
         f"  Estado: PENDIENTE de aprobación médica."
-    )
+    ) + aviso
 
 
 @tool
@@ -558,14 +577,23 @@ def enviar_consulta_medica(paciente_id: int, medico_id: int, consulta: str) -> s
         VALUES (?, ?, 'consulta_medica', ?)
     """, (paciente_id, medico_id, consulta))
     conn.commit()
+    solicitud_id = cursor.lastrowid
 
+    # Aviso al consultorio: entró una consulta nueva para responder.
+    aviso = _avisar_consultorio(
+        "Nueva consulta pendiente",
+        f"Entró una CONSULTA (#{solicitud_id}) de "
+        f"{paciente['nombre']} {paciente['apellido']} para Dr/a. "
+        f"{medico['nombre']} {medico['apellido']}.\n"
+        f"Consulta: {consulta}"
+    )
     return (
-        f"Consulta registrada (ID #{cursor.lastrowid}):\n"
+        f"Consulta registrada (ID #{solicitud_id}):\n"
         f"  Paciente: {paciente['nombre']} {paciente['apellido']}\n"
         f"  Dirigida a: Dr/a. {medico['nombre']} {medico['apellido']}\n"
         f"  Consulta: {consulta}\n"
         f"  Estado: PENDIENTE — el médico la revisará y responderá."
-    )
+    ) + aviso
 
 
 # =============================================================================
@@ -813,6 +841,59 @@ def rechazar_solicitud(solicitud_id: int, motivo: str) -> str:
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Motivo: {motivo}"
+    ) + aviso
+
+
+@tool
+def responder_consulta(solicitud_id: int, respuesta: str) -> str:
+    """
+    Responde una CONSULTA médica pendiente de un paciente. La marca como
+    respondida, guarda la respuesta del médico y se la envía al paciente por email.
+    Usar esta tool (no aprobar/rechazar) para contestar consultas: dudas sobre
+    medicación, efectos adversos, controles, etc.
+
+    Args:
+        solicitud_id: ID de la consulta a responder
+        respuesta: Respuesta del médico para el paciente (texto claro)
+    Returns:
+        Confirmación de que la consulta fue respondida y el paciente notificado
+    """
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT s.id, s.tipo, s.estado, s.descripcion, s.paciente_id, p.nombre, p.apellido
+        FROM solicitudes s JOIN pacientes p ON s.paciente_id = p.id
+        WHERE s.id = ?
+    """, (solicitud_id,))
+    sol = cursor.fetchone()
+
+    if not sol:
+        return f"No se encontró la solicitud #{solicitud_id}."
+    if sol['tipo'] != 'consulta_medica':
+        return (f"La solicitud #{solicitud_id} es de tipo '{sol['tipo']}', no una consulta. "
+                f"Para recetas usá aprobar_solicitud / rechazar_solicitud.")
+    if sol['estado'] != 'pendiente':
+        return f"La consulta #{solicitud_id} ya fue {sol['estado']}."
+
+    cursor.execute("""
+        UPDATE solicitudes
+        SET estado = 'respondida',
+            respuesta_medico = ?,
+            fecha_resolucion = datetime('now', 'localtime')
+        WHERE id = ?
+    """, (respuesta, solicitud_id))
+    conn.commit()
+
+    aviso = _avisar(
+        sol['paciente_id'], "Respuesta a tu consulta",
+        f"El médico respondió tu consulta:\n\n"
+        f"Tu consulta: {sol['descripcion']}\n\n"
+        f"Respuesta: {respuesta}"
+    )
+    return (
+        f"Consulta #{solicitud_id} RESPONDIDA:\n"
+        f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
+        f"  Respuesta: {respuesta}"
     ) + aviso
 
 
@@ -1223,6 +1304,7 @@ tools_medico = [
     ver_solicitudes_pendientes,
     aprobar_solicitud,
     rechazar_solicitud,
+    responder_consulta,             # Responder una consulta del paciente (avisa por email)
     cancelar_dia_completo,          # Cancelar todos los turnos de un día
     listar_medicos,                 # Ver los médicos del centro (y sus IDs)
     buscar_pubmed,                  # Búsqueda de literatura médica (con abstracts)
