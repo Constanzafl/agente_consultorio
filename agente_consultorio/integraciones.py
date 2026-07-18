@@ -30,8 +30,9 @@ except ImportError:
 load_dotenv()
 
 
-def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
-    """Envía un email vía Gmail. Devuelve un mensaje de estado (no lanza excepción)."""
+def enviar_email(destinatario: str, asunto: str, cuerpo: str, adjunto: str = "") -> str:
+    """Envía un email vía Gmail. Devuelve un mensaje de estado (no lanza excepción).
+    Si `adjunto` es la ruta a un archivo (ej. el PDF de la receta), lo adjunta."""
     remitente = os.getenv("GMAIL_USER", "").strip()
     password = os.getenv("GMAIL_APP_PASSWORD", "").strip()
     if not remitente or not password:
@@ -46,6 +47,17 @@ def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
     msg["Subject"] = asunto
     msg.set_content(cuerpo)
 
+    if adjunto:
+        try:
+            import os as _os
+            with open(adjunto, "rb") as f:
+                datos = f.read()
+            msg.add_attachment(datos, maintype="application", subtype="pdf",
+                               filename=_os.path.basename(adjunto))
+        except Exception as e:
+            # Si falla el adjunto, mandamos igual el mail (sin el PDF).
+            print(f"[email] No se pudo adjuntar {adjunto}: {e}")
+
     try:
         contexto = ssl.create_default_context()
         # timeout=15: si el servidor no responde, corta (no cuelga el agente).
@@ -57,9 +69,10 @@ def enviar_email(destinatario: str, asunto: str, cuerpo: str) -> str:
         return f"Error al enviar el email: {e}"
 
 
-def avisar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
+def avisar_paciente(paciente_id: int, asunto: str, mensaje: str, adjunto: str = "") -> str:
     """Envía un email al paciente (a la casilla de su ficha). Función plana, reutilizable
     tanto por la tool como por las acciones automáticas (sacar/cancelar turno, aprobar receta).
+    Si `adjunto` es una ruta a un archivo (ej. el PDF de la receta), lo adjunta.
     Devuelve un estado; nunca lanza excepción."""
     cursor = conn.cursor()
     cursor.execute("SELECT nombre, apellido, email FROM pacientes WHERE id = ? AND activo = 1", (paciente_id,))
@@ -69,7 +82,7 @@ def avisar_paciente(paciente_id: int, asunto: str, mensaje: str) -> str:
     if not p["email"]:
         return f"El paciente {p['nombre']} {p['apellido']} no tiene email registrado."
     cuerpo = f"Hola {p['nombre']},\n\n{mensaje}\n\n— Consultorio de Medicina Familiar"
-    return enviar_email(p["email"], asunto, cuerpo)
+    return enviar_email(p["email"], asunto, cuerpo, adjunto)
 
 
 def avisar_consultorio(asunto: str, mensaje: str) -> str:

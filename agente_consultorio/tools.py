@@ -17,9 +17,11 @@ from langchain.tools import tool
 try:
     from .db import conn
     from .integraciones import avisar_paciente, avisar_consultorio
+    from .recetas_pdf import generar_receta_pdf
 except ImportError:
     from db import conn
     from integraciones import avisar_paciente, avisar_consultorio
+    from recetas_pdf import generar_receta_pdf
 
 # Consola en UTF-8 (Windows) para no romper al imprimir caracteres especiales.
 try:
@@ -28,11 +30,12 @@ except Exception:
     pass
 
 
-def _avisar(paciente_id: int, asunto: str, mensaje: str) -> str:
-    """Notifica al paciente por email (best-effort). Devuelve una nota para el agente
-    solo si el mail se envió; si no está configurado o falla, no molesta."""
+def _avisar(paciente_id: int, asunto: str, mensaje: str, adjunto: str = "") -> str:
+    """Notifica al paciente por email (best-effort). Si `adjunto` es una ruta a un archivo
+    (ej. el PDF de la receta), lo adjunta. Devuelve una nota para el agente solo si el mail
+    se envió; si no está configurado o falla, no molesta."""
     try:
-        estado = avisar_paciente(paciente_id, asunto, mensaje)
+        estado = avisar_paciente(paciente_id, asunto, mensaje, adjunto)
         return "\n(Se notificó al paciente por email.)" if estado.startswith("Email enviado") else ""
     except Exception:
         return ""
@@ -751,7 +754,7 @@ def ver_solicitudes_pendientes(medico_id: int = 0) -> str:
 
 
 @tool
-def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
+def aprobar_solicitud(solicitud_id: int, nota_medico: str = "", diagnostico: str = "") -> str:
     """
     Aprueba una solicitud pendiente (receta, consulta, formulario).
     El médico puede agregar una nota o modificación.
@@ -759,6 +762,8 @@ def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
     Args:
         solicitud_id: ID de la solicitud a aprobar
         nota_medico: Nota opcional del médico (correcciones, indicaciones adicionales)
+        diagnostico: Diagnóstico para la receta (lo indica el médico). Si se deja vacío,
+            en el PDF se usan las patologías de la ficha del paciente como referencia.
     Returns:
         Confirmación de la aprobación
     """
@@ -785,16 +790,32 @@ def aprobar_solicitud(solicitud_id: int, nota_medico: str = "") -> str:
     """, (nota_medico, solicitud_id))
     conn.commit()
 
+    # Si es una RECETA, generamos el PDF (demo) y lo mandamos adjunto al paciente.
+    # TODO (producción): en este punto se emitiría la receta vía una plataforma
+    # autorizada (ej. RCTA / API QBI2) para obtener firma electrónica y registro válidos.
+    pdf = ""
+    extra = ""
+    if sol['tipo'] == 'receta':
+        try:
+            pdf = generar_receta_pdf(solicitud_id, diagnostico) or ""
+            if pdf:
+                extra = f"\n  Receta PDF generada: {pdf}"
+        except Exception as e:
+            extra = f"\n  (No se pudo generar el PDF de la receta: {e})"
+
     nota = f" Nota del médico: {nota_medico}." if nota_medico else ""
+    cuerpo = f"Tu solicitud de {sol['tipo']} (#{solicitud_id}) fue APROBADA.{nota}"
+    if pdf:
+        cuerpo += "\n\nAdjuntamos tu receta en PDF."
     aviso = _avisar(
-        sol['paciente_id'], f"Tu {sol['tipo']} fue aprobada",
-        f"Tu solicitud de {sol['tipo']} (#{solicitud_id}) fue APROBADA.{nota}"
+        sol['paciente_id'], f"Tu {sol['tipo']} fue aprobada", cuerpo, adjunto=pdf
     )
     return (
         f"Solicitud #{solicitud_id} APROBADA:\n"
         f"  Tipo: {sol['tipo']}\n"
         f"  Paciente: {sol['nombre']} {sol['apellido']}\n"
         f"  Nota del médico: {nota_medico or 'Sin observaciones'}"
+        f"{extra}"
     ) + aviso
 
 

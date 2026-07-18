@@ -19,6 +19,9 @@ env/
 # ChromaDB (se regenera con los PDFs)
 chroma_db/
 
+# Recetas PDF generadas al aprobar (se regeneran)
+recetas_generadas/
+
 # IDE
 .vscode/
 .idea/

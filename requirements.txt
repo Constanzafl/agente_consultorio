@@ -26,6 +26,7 @@ langsmith>=0.1.0                 # Tracing de los agentes (opcional, por env var
 # --- Utilidades ---
 python-dotenv>=1.0.0
 requests>=2.31.0
+reportlab>=4.0.0                 # Genera el PDF de la receta (demo) al aprobarla
 
 # --- UI (Fase 7) ---
 chainlit>=1.0.0
