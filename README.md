@@ -34,54 +34,19 @@ Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema e
 
 ### El recorrido de una conversación
 
-```
-   Usuario (UI Chainlit) — elige perfil: Paciente, o uno de los médicos del centro
-                              │  escribe un mensaje
-                              ▼
-             ┌──────────────────────────────────┐
-             │  GUARDARRAIL DE URGENCIAS         │ ── ¿el PACIENTE describe una urgencia?
-             │  (SOLO se aplica al paciente)     │       SÍ ──► "Llamá al 911 / guardia" (FIN)
-             └────────────────┬─────────────────┘
-                              │  no  ·  el médico pasa directo (sin este chequeo)
-                              ▼
-                    ┌───────────────────┐
-                    │   ORQUESTADOR     │  rutea según el rol
-                    └────┬─────────┬────┘
-                paciente │         │ médico
-                         ▼         ▼
-           ┌──────────────────┐  ┌──────────────────┐
-           │  AGENTE PACIENTE │  │  AGENTE MÉDICO   │  (el LLM decide qué herramienta usar)
-           └────────┬─────────┘  └─────────┬────────┘
-                    └──────────┬───────────┘
-                               ▼
-        ┌───────────────────────────────────────────────────────────┐
-        │  TOOLS            RAG guías        Skills        APIs        │
-        │  turnos, recetas, (ChromaDB,       (playbooks    (PubMed,    │
-        │  aprobar, memoria  guías en PDF)   .md)          OpenFDA)    │
-        └───────────────┬───────────────────────────────────┬────────┘
-                        ▼                                   ▼
-              ┌──────────────────┐                 servicios externos
-              │  SQLite (datos)  │ ◄── memoria de largo plazo
-              └──────────────────┘
-```
-
-<details>
-<summary>Ver el mismo diagrama en Mermaid</summary>
-
 ```mermaid
 flowchart TD
-    U["Usuario · UI Chainlit<br/>perfil: Paciente / un Médico"] --> G{"Guardarrail urgencias<br/>(solo paciente)"}
+    U["Usuario · UI Chainlit<br/>perfil: Paciente / un Médico"] --> G{"Guardarrail de urgencias<br/>(SOLO paciente)"}
     G -->|paciente + urgencia| E["Escala: 911 / guardia · FIN"]
-    G -->|no urgencia / es médico| O["Orquestador<br/>rutea por rol"]
+    G -->|no urgencia · o es médico| O["Orquestador<br/>rutea por rol"]
     O -->|paciente| AP["Agente Paciente"]
     O -->|médico| AM["Agente Médico"]
     AP --> T["Tools · RAG guías · Skills"]
     AM --> T
-    T --> DB[("SQLite<br/>memoria largo plazo")]
-    T --> API["PubMed / OpenFDA"]
-    T --> MAIL["Email (avisos automáticos)"]
+    T --> DB[("SQLite · datos +<br/>memoria de largo plazo")]
+    T --> API["APIs externas<br/>PubMed · OpenFDA"]
+    T --> MAIL["Email · avisos +<br/>receta en PDF"]
 ```
-</details>
 
 ### Qué hace cada archivo
 
