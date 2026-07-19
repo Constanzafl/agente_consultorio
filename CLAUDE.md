@@ -7,7 +7,7 @@ Objetivo doble: aprobar el TP con buena nota + tener proyecto portfolio + produc
 
 ## Arquitectura
 - **Orquestador**: rutea entre agente paciente y agente médico según el rol del usuario
-- **Agente paciente** (10 tools): turnos, registro, recetas, consultas, hábitos saludables
+- **Agente paciente** : turnos, registro, recetas, consultas, hábitos saludables
 - **Agente médico**: agenda, aprobar/rechazar solicitudes, medicamentos (OpenFDA), PubMed, seguimiento crónicos
 - **Human-in-the-loop**: todo lo que genera el agente paciente (recetas, respuestas) queda pendiente para aprobación del médico
 
@@ -27,7 +27,7 @@ Por eso:
 
 ## Stack técnico (todo open source / gratis)
 - LLM PRIMARIO: LM Studio local (gemma-4-e4b), ilimitado. Fallback cloud opcional
-  (Gemini free tier → Groq → HuggingFace) vía `llm.py`. Ver failover multi-proveedor.
+  (Gemini free tier → Groq ) vía `llm.py`. Ver failover multi-proveedor.
 - Embeddings: HuggingFace `sentence-transformers/all-mpnet-base-v2`
 - Vector store: ChromaDB
 - Base de datos: SQLite (7 tablas: pacientes, medicos, agenda_medico, turnos, solicitudes, historial_conversaciones).

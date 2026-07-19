@@ -10,7 +10,7 @@ Arquitectura:
   - guardarrail   : primer filtro. Detecta urgencias médicas y escala (911/guardia).
   - orquestador   : rutea por ROL. Si la UI pasa el rol lo usa directo;
                     si no, un LLM lo clasifica según el mensaje (híbrido).
-  - agente_paciente: 10 tools (turnos, recetas, consultas, memoria).
+  - agente_paciente: tools para turnos, recetas, consultas, memoria.
   - agente_medico  : tools de agenda, aprobar/rechazar, medicamentos (OpenFDA), PubMed.
   - Cada agente tiene su loop agente <-> ToolNode hasta que deja de pedir tools.
 
