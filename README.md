@@ -38,12 +38,11 @@ Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema e
    Usuario (UI Chainlit) — elige perfil: Paciente, o uno de los médicos del centro
                               │  escribe un mensaje
                               ▼
-                    ┌────────────────────────┐
-                    │  GUARDARRAIL           │ ── ¿es una urgencia? ──► SÍ: "Llamá al 911 /
-                    │  (urgencias, solo       │                             andá a la guardia" (FIN)
-                    │   para el paciente)    │
-                    └─────────┬──────────────┘
-                              │ no (o es médico → pasa directo)
+             ┌──────────────────────────────────┐
+             │  GUARDARRAIL DE URGENCIAS         │ ── ¿el PACIENTE describe una urgencia?
+             │  (SOLO se aplica al paciente)     │       SÍ ──► "Llamá al 911 / guardia" (FIN)
+             └────────────────┬─────────────────┘
+                              │  no  ·  el médico pasa directo (sin este chequeo)
                               ▼
                     ┌───────────────────┐
                     │   ORQUESTADOR     │  rutea según el rol
@@ -67,7 +66,7 @@ Al paciente se lo **identifica por DNI** (no se asume quién es). Y el sistema e
 ```
 
 <details>
-<summary></summary>
+<summary>Ver el mismo diagrama en Mermaid</summary>
 
 ```mermaid
 flowchart TD
