@@ -160,16 +160,8 @@ chainlit run app.py              # se abre en http://localhost:8000
 python tests/test_evaluacion.py
 ```
 
-## Requisitos del TP cubiertos
-
-- [x] **RAG** — Guías clínicas en PDF (HTA, DM2, hábitos) indexadas en ChromaDB.
-- [x] **Herramientas** — Tools de turnos, recetas y agenda + APIs externas (PubMed, OpenFDA).
-- [x] **Guardarrailes** — Escalar urgencias, no diagnosticar, confirmar acciones, validar datos.
-- [x] **Evaluación** — Pipeline: casos funcionales + guardarrailes + LLM-as-judge.
-- [x] **Múltiples agentes** (plus) — Orquestador + agente paciente + agente médico.
-- [x] **Human-in-the-loop** (plus) — El médico aprueba/rechaza recetas (con **PDF** generado) y responde consultas; el paciente recibe todo por email.
-- [x] **Memoria** — Corto plazo (estado LangGraph) y largo plazo (SQLite).
-- [x] **Skills** — Playbooks modulares que el agente carga on-demand.
+## Presentacion
+- Video [Ver Video](https://www.youtube.com/watch?v=-xUkNRxq2dY)  
 
 ## Autor
 
