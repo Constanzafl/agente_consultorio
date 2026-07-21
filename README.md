@@ -160,7 +160,7 @@ chainlit run app.py              # se abre en http://localhost:8000
 python tests/test_evaluacion.py
 ```
 
-## Presentacion
+## Presentación
 - Video [Ver Video](https://www.youtube.com/watch?v=-xUkNRxq2dY)  
 
 ## Autor
